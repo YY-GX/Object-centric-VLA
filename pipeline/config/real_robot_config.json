@@ -1,0 +1,103 @@
+{
+  "_comment": "Hardware and deployment configuration for real robot pipeline",
+
+  "cameras": {
+    "left_camera_id": "36087771",
+    "right_camera_id": "",
+    "wrist_camera_id": "16478870"
+  },
+
+  "foundationpose_server": {
+    "host": "localhost",
+    "port": 5558,
+    "_comment": "FoundationPose server running in docker"
+  },
+
+  "camera_intrinsics": {
+    "fx": 521.84,
+    "fy": 521.84,
+    "cx": 638.02,
+    "cy": 357.27,
+    "_comment": "Camera intrinsic parameters (focal length, principal point)"
+  },
+
+  "camera_extrinsics": {
+    "left_camera": [1.0699190823177271, -0.08348064538498723, 0.5994996855903145, -2.033196480535443, -0.04056433323971986, 1.579031504069898],
+    "wrist_camera": [0.31117770642304177, -0.004535529476204489, 0.32522561199125943, 2.8033272290426576, 0.06624340623131575, 1.604032184978709],
+    "_comment": "Camera extrinsics [x, y, z, roll, pitch, yaw] - camera pose in robot base frame. Update these after running calibration."
+  },
+
+  "object_meshes": {
+    "red_cup": "/home/yygx/PANDA/pipeline/data/meshes/red_cup/mesh.obj",
+    "black_bowl": "/home/yygx/PANDA/pipeline/data/meshes/black_bowl/mesh.obj",
+    "plate": "/home/yygx/PANDA/pipeline/data/meshes/plate/mesh.obj",
+    "_comment": "Paths to object mesh files for FoundationPose"
+  },
+
+  "yoloe_prompts": {
+    "red_cup": "red cup",
+    "black_bowl": "black bowl",
+    "plate": "plate",
+    "_comment": "YOLOE text prompts for each object"
+  },
+
+  "registration": {
+    "save_debug": true,
+    "debug_dir": "/home/yygx/PANDA/pipeline/data/registration",
+    "registration_iteration": 1,
+    "registration_conf": 0.1,
+    "_comment": "Registration settings and debug save directory"
+  },
+
+  "vla_server": {
+    "host": "localhost",
+    "port": 8008,
+    "_comment": "Point to the IP address of the VLA policy server (e.g., GPU server)"
+  },
+
+  "motion_planning": {
+    "position_threshold": 0.02,
+    "orientation_threshold": 0.524,
+    "max_retries": 3,
+    "retry_perturbation_xy": 0.02,
+    "retry_perturbation_z": 0.01,
+    "_comment": "IK_MP uses blocking motion, no control_frequency needed. Perturbations for future retry logic."
+  },
+
+  "above_pose": {
+    "default_height": 0.10,
+    "object_specific": {},
+    "_comment": "Default height above object. object_specific is placeholder for future custom handling."
+  },
+
+  "vla_execution": {
+    "max_timesteps": 400,
+    "open_loop_horizon": 8,
+    "gripper_threshold": 0.5,
+    "_comment": "gripper > 0.5 means open (0), gripper <= 0.5 means close (1)"
+  },
+
+  "success_checking": {
+    "pick": {
+      "min_height_increase": 0.03,
+      "stable_timeout": 2.0
+    },
+    "place": {
+      "xy_distance_threshold": 0.05,
+      "z_height_tolerance": 0.02,
+      "stable_timeout": 2.0
+    }
+  },
+
+  "logging": {
+    "save_video": true,
+    "video_fps": 20,
+    "save_csv": true,
+    "save_dir": "scripts/phase4_real_robot/local_scripts/pipeline/outputs"
+  },
+
+  "tracking": {
+    "tracking_iteration": 5,
+    "_comment": "Number of refinement iterations during tracking"
+  }
+}

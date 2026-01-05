@@ -1,0 +1,53 @@
+{
+  "_comment": "Task and skill configuration for real robot deployment",
+  "_description": "Defines long-horizon tasks and atomic skills for real robot execution",
+
+  "long_horizon_tasks": [
+    {
+      "task_id": 1,
+      "name": "pick the red cup",
+      "skills": [
+        "pick red cup"
+      ]
+    },
+    {
+      "task_id": 2,
+      "name": "pick the red cup and place on plate",
+      "skills": [
+        "pick red cup",
+        "place red cup on plate"
+      ]
+    }
+  ],
+
+  "skill_mappings": {
+    "pick red cup": {
+      "target_object": "red_cup",
+      "language": "pick red cup",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
+    },
+    "place red cup on plate": {
+      "target_object": "plate",
+      "grasp_object": "red_cup",
+      "language": "place red cup on plate",
+      "skill_type": "place",
+      "success_check": "object_on_target"
+    }
+  },
+
+  "_field_reference": {
+    "long_horizon_tasks": {
+      "task_id": "Unique integer ID",
+      "name": "Task name (must match when calling pipeline)",
+      "skills": "List of skill names in execution order (must exist in skill_mappings)"
+    },
+    "skill_mappings": {
+      "target_object": "Object name for pose tracking (e.g., 'black_bowl', 'red_cup')",
+      "target_surface": "Surface name for place skills (e.g., 'plate', 'table')",
+      "language": "VLA language instruction",
+      "skill_type": "Skill category: 'pick', 'place', 'open', 'close', 'turn_on', 'turn_off'",
+      "success_check": "Success verification method: 'object_lifted', 'object_on_target'"
+    }
+  }
+}

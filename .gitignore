@@ -1,0 +1,59 @@
+# Large model files and data
+data/
+model/
+models/
+weights/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.pb
+
+# PDFs and large documents
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Other large directories
+rollouts/
+droid/
+droid_policy_learning/
+middleware/
+test/
+ai_coder_prompts/
+.claude/
+
+# Keep only these directories
+!externals/FoundationPose/
+!externals/Any6D/
+!externals/yoloe/
+!pipeline/
