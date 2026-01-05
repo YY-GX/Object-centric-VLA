@@ -208,8 +208,7 @@ class RealRobotPipeline:
 
         # Success checker
         self.success_checker = SuccessChecker(
-            config=self.robot_config["success_checking"],
-            object_pose_server=None  # Not used anymore
+            config=self.robot_config["success_checking"]
         )
 
         # VLA client
@@ -218,6 +217,9 @@ class RealRobotPipeline:
             server_host=vla_server_config["host"],
             server_port=vla_server_config["port"]
         )
+
+        # Tracking state management
+        self.tracked_objects = set()  # Set of object names currently being tracked
 
         # Video recorder (if enabled)
         if self.robot_config["logging"]["save_video"]:
@@ -386,6 +388,54 @@ class RealRobotPipeline:
         print(f"✅ All {len(self.registration_dict)} objects registered successfully!")
         print(f"{'='*60}\n")
 
+    def _get_tracked_objects_for_skill(self, skill_info: Dict) -> list:
+        """
+        Get list of objects that need to be tracked for this skill.
+
+        Args:
+            skill_info: Skill information from task config
+
+        Returns:
+            List of object names to track
+        """
+        objects = []
+
+        # Always track target_object
+        if "target_object" in skill_info:
+            objects.append(skill_info["target_object"])
+
+        # For place skills, also track grasp_object
+        if skill_info.get("skill_type") == "place" and "grasp_object" in skill_info:
+            objects.append(skill_info["grasp_object"])
+
+        return objects
+
+    def _should_keep_tracking(self, object_name: str, current_skill_idx: int) -> bool:
+        """
+        Check if object should continue being tracked after current skill.
+
+        Args:
+            object_name: Object to check
+            current_skill_idx: Index of current skill in sequence
+
+        Returns:
+            True if next skill needs this object
+        """
+        # Check if there's a next skill
+        if current_skill_idx + 1 >= len(self.skill_sequence):
+            return False
+
+        # Get next skill info
+        next_skill_name = self.skill_sequence[current_skill_idx + 1]
+        next_skill_info = get_skill_info(next_skill_name, self.task_config)
+
+        if not next_skill_info:
+            return False
+
+        # Check if next skill needs this object
+        next_tracked_objects = self._get_tracked_objects_for_skill(next_skill_info)
+        return object_name in next_tracked_objects
+
     def execute_task(self, max_retries: int = 3) -> bool:
         """
         Execute long-horizon task.
@@ -444,19 +494,17 @@ class RealRobotPipeline:
                     print(f"\n🔄 Retry {retry}/{max_retries-1}")
 
                 result = self._execute_single_skill(
-                    skill_name=skill_name,
-                    target_object=target_object,
-                    language=language,
-                    skill_type=skill_type,
+                    skill_info=skill_info,
+                    skill_idx=skill_idx - 1,  # Convert to 0-indexed
                     initial_states=initial_states,
                     csv_logger=csv_logger
                 )
 
                 if result["success"]:
                     skill_success = True
-                    # Update initial state for next skill
-                    if "final_object_pose" in result:
-                        initial_states[target_object] = result["final_object_pose"]
+                    # Update initial states for next skill (handles multiple objects)
+                    if "final_object_poses" in result:
+                        initial_states.update(result["final_object_poses"])
                     break
                 else:
                     print(f"❌ Skill failed: {result['reason']}")
@@ -490,32 +538,30 @@ class RealRobotPipeline:
 
     def _execute_single_skill(
         self,
-        skill_name: str,
-        target_object: str,
-        language: str,
-        skill_type: str,
+        skill_info: Dict,
+        skill_idx: int,
         initial_states: Dict,
         csv_logger: Optional[CSVLogger]
     ) -> Dict:
         """
-        Execute single atomic skill.
+        Execute single atomic skill with multi-object tracking support.
 
         Args:
-            skill_name: Full skill name
-            target_object: Target object name
-            language: VLA language instruction
-            skill_type: "pick", "place", etc.
-            initial_states: Initial object poses
+            skill_info: Skill information from task config
+            skill_idx: Index of skill in sequence (0-indexed)
+            initial_states: Initial object poses (updated in-place)
             csv_logger: CSV logger instance
 
         Returns:
-            Dict with "success", "reason", "final_object_pose"
+            Dict with "success", "reason", "final_object_poses"
         """
-        # Get registration info
-        if target_object not in self.registration_dict:
-            return {"success": False, "reason": f"Object '{target_object}' not registered"}
+        skill_name = f"{skill_info['skill_type']} {skill_info['target_object']}"
+        target_object = skill_info["target_object"]
+        language = skill_info["language"]
+        skill_type = skill_info["skill_type"]
 
-        reg_info = self.registration_dict[target_object]
+        # Get list of objects to track for this skill
+        objects_to_track = self._get_tracked_objects_for_skill(skill_info)
 
         # Load camera intrinsics
         K_config = self.robot_config["camera_intrinsics"]
@@ -525,48 +571,67 @@ class RealRobotPipeline:
             [0, 0, 1]
         ], dtype=np.float32)
 
-        # Step 1: Start tracking
-        print(f"1️⃣  Starting tracking for '{target_object}'...")
-        track_result = self.object_pose_client.start_tracking(
-            K=K,
-            mesh_path=reg_info["mesh_path"],
-            initial_pose=reg_info["pose_camera"],  # Use camera frame for tracking
-            object_name=target_object
-        )
+        # Step 1: Start tracking for all needed objects
+        print(f"1️⃣  Starting tracking for {len(objects_to_track)} object(s): {objects_to_track}...")
+        for obj_name in objects_to_track:
+            # Skip if already tracking
+            if obj_name in self.tracked_objects:
+                print(f"   ⏩ {obj_name} already tracking (from previous skill)")
+                continue
 
-        if track_result is None or not track_result["success"]:
-            return {"success": False, "reason": f"Failed to start tracking: {track_result['message'] if track_result else 'No response'}"}
-        print(f"   ✅ Tracking started\n")
+            if obj_name not in self.registration_dict:
+                return {"success": False, "reason": f"Object '{obj_name}' not registered"}
 
-        # Step 2: Get initial object pose
-        print(f"2️⃣  Getting object pose...")
+            reg_info = self.registration_dict[obj_name]
+            track_result = self.object_pose_client.start_tracking(
+                K=K,
+                mesh_path=reg_info["mesh_path"],
+                initial_pose=reg_info["pose_camera"],
+                object_name=obj_name
+            )
+
+            if track_result is None or not track_result["success"]:
+                return {"success": False, "reason": f"Failed to start tracking {obj_name}"}
+
+            self.tracked_objects.add(obj_name)
+            print(f"   ✅ Started tracking: {obj_name}")
+
+        print()
+
+        # Step 2: Collect initial poses for all tracked objects
+        print(f"2️⃣  Collecting initial poses for tracked objects...")
         obs = self.robot_env.get_observation()
-        pose_result = self.object_pose_client.get_pose(
-            rgb=self._get_camera_data(obs, 'left', 'image'),
-            depth=self._get_camera_data(obs, 'left', 'depth'),
-            K=K,
-            iteration=self.robot_config["tracking"]["tracking_iteration"]
-        )
+        for obj_name in objects_to_track:
+            # Skip if already have initial state
+            if obj_name in initial_states:
+                print(f"   ⏩ {obj_name} initial state already collected")
+                continue
 
-        if pose_result is None or not pose_result["success"]:
-            self.object_pose_client.end_tracking()
-            return {"success": False, "reason": f"Failed to get pose"}
+            pose_result = self.object_pose_client.get_pose(
+                object_name=obj_name,
+                rgb=self._get_camera_data(obs, 'left', 'image'),
+                depth=self._get_camera_data(obs, 'left', 'depth'),
+                K=K,
+                iteration=self.robot_config["tracking"]["tracking_iteration"]
+            )
 
-        # Transform pose from camera frame to base frame
-        pose_cam = np.array(pose_result["pose"])
-        object_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
-        object_position = object_pose_matrix[:3, 3]
-        print(f"   ✅ Object pose (base frame): [{object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f}]\n")
+            if pose_result is None or not pose_result["success"]:
+                return {"success": False, "reason": f"Failed to get initial pose for {obj_name}"}
 
-        # Store initial state (for success checking)
-        if target_object not in initial_states:
-            initial_states[target_object] = {"position": object_position, "pose_matrix": object_pose_matrix}
+            pose_cam = np.array(pose_result["pose"])
+            object_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
+            object_position = object_pose_matrix[:3, 3]
+            initial_states[obj_name] = {"position": object_position, "pose_matrix": object_pose_matrix}
+            print(f"   ✅ {obj_name}: [{object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f}]")
+
+        print()
 
         # Step 3: Calculate above pose
         print(f"3️⃣  Calculating above pose...")
-        object_pose_dict = {"position": object_position}
+        object_pose_dict = {"position": target_obj_pose["position"]}
 
         # Load mesh to get object size
+        reg_info = self.registration_dict[target_object]
         mesh = trimesh.load(reg_info["mesh_path"])
         mesh_vertices = np.array(mesh.vertices)
 
@@ -574,7 +639,6 @@ class RealRobotPipeline:
             object_pose_dict, target_object, mesh_vertices=mesh_vertices
         )
         print()
-
 
         # Step 4: Move to above pose
         if self.motion_planner is not None:
@@ -609,20 +673,21 @@ class RealRobotPipeline:
             print(f"4️⃣  Motion planner not available (skipping)")
             print()
 
-
-        exit(0)
-
-        # Step 5: Execute VLA skill (with tracking)
+        # Step 5: Execute VLA skill (with tracking and success checking)
         print(f"5️⃣  Executing VLA skill: '{language}'...")
         vla_result = self._execute_vla_skill(
-            language=language,
-            target_object=target_object,
+            skill_info=skill_info,
+            initial_states=initial_states,
             K=K,
             csv_logger=csv_logger
         )
 
         if not vla_result["success"]:
-            self.object_pose_client.end_tracking()
+            # Smart end tracking
+            for obj_name in list(self.tracked_objects):
+                if not self._should_keep_tracking(obj_name, skill_idx):
+                    self.object_pose_client.end_tracking(object_name=obj_name)
+                    self.tracked_objects.remove(obj_name)
             return {"success": False, "reason": f"VLA execution failed: {vla_result['reason']}"}
         print()
 
@@ -635,67 +700,89 @@ class RealRobotPipeline:
             print(f"6️⃣  Motion planner not available (skipping)")
             print()
 
-        # Step 7: Get final pose
-        print(f"7️⃣  Getting final object pose...")
+        # Step 7: Get final poses for all tracked objects
+        print(f"7️⃣  Getting final poses for tracked objects...")
         obs_final = self.robot_env.get_observation()
-        final_pose_result = self.object_pose_client.get_pose(
-            rgb=self._get_camera_data(obs_final, 'left', 'image'),
-            depth=self._get_camera_data(obs_final, 'left', 'depth'),
-            K=K,
-            iteration=self.robot_config["tracking"]["tracking_iteration"]
-        )
+        final_object_poses = {}
 
-        final_object_pose = None
-        if final_pose_result and final_pose_result["success"]:
-            # Transform pose from camera frame to base frame
-            pose_cam = np.array(final_pose_result["pose"])
-            final_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
-            final_object_pose = {"position": final_pose_matrix[:3, 3], "pose_matrix": final_pose_matrix}
+        for obj_name in objects_to_track:
+            final_pose_result = self.object_pose_client.get_pose(
+                object_name=obj_name,
+                rgb=self._get_camera_data(obs_final, 'left', 'image'),
+                depth=self._get_camera_data(obs_final, 'left', 'depth'),
+                K=K,
+                iteration=self.robot_config["tracking"]["tracking_iteration"]
+            )
+
+            if final_pose_result and final_pose_result["success"]:
+                pose_cam = np.array(final_pose_result["pose"])
+                final_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
+                final_object_poses[obj_name] = {
+                    "position": final_pose_matrix[:3, 3],
+                    "pose_matrix": final_pose_matrix
+                }
+                final_pos = final_pose_matrix[:3, 3]
+                print(f"   ✅ {obj_name}: [{final_pos[0]:.3f}, {final_pos[1]:.3f}, {final_pos[2]:.3f}]")
         print()
 
-        # Step 8: End tracking
-        self.object_pose_client.end_tracking()
+        # Step 8: Smart end tracking
+        print(f"8️⃣  Managing tracking sessions...")
+        for obj_name in list(self.tracked_objects):
+            if not self._should_keep_tracking(obj_name, skill_idx):
+                self.object_pose_client.end_tracking(object_name=obj_name)
+                self.tracked_objects.remove(obj_name)
+                print(f"   ⏹  Ended tracking: {obj_name}")
+            else:
+                print(f"   ⏩ Keeping tracking: {obj_name} (needed for next skill)")
+        print()
 
-        # Step 9: Check skill success
-        print(f"8️⃣  Checking skill success...")
-        success_result = self.success_checker.check_skill_success(
-            skill_name=skill_name,
-            skill_type=skill_type,
-            target_object=target_object,
-            initial_state=initial_states.get(target_object),
-            final_state=final_object_pose
+        # Step 9: Check skill success using new method
+        print(f"9️⃣  Checking skill success...")
+        success_check_type = skill_info.get("success_check", "object_lifted")
+        mesh_paths = {name: info["mesh_path"] for name, info in self.registration_dict.items()}
+
+        success_result = self.success_checker.check_success(
+            success_check_type=success_check_type,
+            skill_info=skill_info,
+            initial_states=initial_states,
+            current_states=final_object_poses,
+            mesh_paths=mesh_paths
         )
+
+        print(f"   {'✅' if success_result['success'] else '❌'} {success_result['reason']}")
+        print()
 
         return {
             "success": success_result["success"],
             "reason": success_result["reason"],
             "confidence": success_result["confidence"],
-            "final_object_pose": final_object_pose
+            "final_object_poses": final_object_poses
         }
 
 
     def _execute_vla_skill(
         self,
-        language: str,
-        target_object: str,
+        skill_info: Dict,
+        initial_states: Dict,
         K: np.ndarray,
         csv_logger: Optional[CSVLogger]
     ) -> Dict:
         """
-        Execute VLA skill with continuous object tracking.
-
-        Similar to _execute_vla_skill but calls get_pose during execution
-        to track object movement.
+        Execute VLA skill with continuous object tracking and success checking.
 
         Args:
-            language: VLA language instruction
-            target_object: Object being tracked
+            skill_info: Skill information from task config
+            initial_states: Initial object poses for success checking
             K: Camera intrinsics
             csv_logger: CSV logger instance
 
         Returns:
             Dict with "success" and "reason"
         """
+        language = skill_info["language"]
+        success_check_type = skill_info.get("success_check", "object_lifted")
+        objects_to_track = self._get_tracked_objects_for_skill(skill_info)
+        mesh_paths = {name: info["mesh_path"] for name, info in self.registration_dict.items()}
         if self.robot_env is None:
             print(f"   ⚠️  Robot environment not available")
             return {"success": False, "reason": "Robot environment not available"}
@@ -715,18 +802,37 @@ class RealRobotPipeline:
             # Get current observation
             obs = self.robot_env.get_observation()
 
-            # Track object pose
-            pose_result = self.object_pose_client.get_pose(
-                rgb=self._get_camera_data(obs, 'left', 'image'),
-                depth=self._get_camera_data(obs, 'left', 'depth'),
-                K=K,
-                iteration=self.robot_config["tracking"]["tracking_iteration"]
-            )
-            if pose_result and pose_result["success"]:
-                # Transform pose from camera frame to base frame
-                pose_cam = np.array(pose_result["pose"])
-                tracked_pose = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
-                # Could use tracked pose for additional logic if needed
+            # Track all objects and check for success
+            current_states = {}
+            for obj_name in objects_to_track:
+                pose_result = self.object_pose_client.get_pose(
+                    object_name=obj_name,
+                    rgb=self._get_camera_data(obs, 'left', 'image'),
+                    depth=self._get_camera_data(obs, 'left', 'depth'),
+                    K=K,
+                    iteration=self.robot_config["tracking"]["tracking_iteration"]
+                )
+                if pose_result and pose_result["success"]:
+                    pose_cam = np.array(pose_result["pose"])
+                    pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
+                    current_states[obj_name] = {
+                        "position": pose_matrix[:3, 3],
+                        "pose_matrix": pose_matrix
+                    }
+
+            # Check skill success
+            if len(current_states) == len(objects_to_track):
+                success_result = self.success_checker.check_success(
+                    success_check_type=success_check_type,
+                    skill_info=skill_info,
+                    initial_states=initial_states,
+                    current_states=current_states,
+                    mesh_paths=mesh_paths
+                )
+
+                if success_result["success"]:
+                    print(f"   ✅ Success detected at step {t_step}: {success_result['reason']}")
+                    return {"success": True, "reason": f"Success at step {t_step}"}
 
             # Prepare observation for VLA
             vla_obs = self._prepare_vla_observation(obs)

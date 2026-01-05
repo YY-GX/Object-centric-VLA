@@ -2,191 +2,216 @@
 """
 Success Checker - Verify atomic skill completion.
 
-This module checks whether manipulation skills succeeded.
-Currently a template - all checks return False (to be implemented).
-
-Skill types:
-- PICK: Object lifted above initial height
-- PLACE: Object on target surface
-- OPEN/CLOSE: Joint angle change
-- TURN_ON/OFF: Visual detection
+Implements two success checking methods:
+- object_lifted: Check if object's Z position increased by threshold
+- object_on_target: Check if grasp_object is placed on target_object
 """
 
 import numpy as np
-from typing import Dict, Optional
+import trimesh
+from typing import Dict
 
 
 class SuccessChecker:
     """
     Check skill success using heuristics.
 
-    Template implementation - all checks currently return False.
-    To be filled in with actual success checking logic.
+    Supports:
+    - object_lifted: Object lifted by min_height_increase
+    - object_on_target: Object placed on target (XY + Z distance checks)
     """
 
-    def __init__(self, config: Dict, object_pose_server=None):
+    def __init__(self, config: Dict):
         """
         Initialize success checker.
 
         Args:
-            config: Success checking config with thresholds
-            object_pose_server: (Unused) Placeholder for future use
+            config: Success checking config with:
+                - object_lifted:
+                    - min_height_increase: float (meters, default 0.03)
+                - object_on_target:
+                    - xy_distance_threshold: float (meters, default 0.05)
+                    - z_buffer_distance: float (meters, default 0.03)
         """
         self.config = config
-        self.pick_config = config.get("pick", {})
-        self.place_config = config.get("place", {})
 
-        print(f"✓ SuccessChecker initialized (template mode - all checks return False)")
+        # object_lifted parameters
+        lifted_config = config.get("object_lifted", {})
+        self.min_height_increase = lifted_config.get("min_height_increase", 0.03)
 
-    def check_skill_success(
+        # object_on_target parameters
+        on_target_config = config.get("object_on_target", {})
+        self.xy_distance_threshold = on_target_config.get("xy_distance_threshold", 0.05)
+        self.z_buffer_distance = on_target_config.get("z_buffer_distance", 0.03)
+
+        print(f"✓ SuccessChecker initialized:")
+        print(f"   object_lifted: min_height={self.min_height_increase}m")
+        print(f"   object_on_target: xy_threshold={self.xy_distance_threshold}m, z_buffer={self.z_buffer_distance}m")
+
+    def check_success(
         self,
-        skill_name: str,
-        skill_type: str,
-        target_object: str,
-        initial_state: Optional[Dict] = None,
-        final_state: Optional[Dict] = None
+        success_check_type: str,
+        skill_info: Dict,
+        initial_states: Dict,
+        current_states: Dict,
+        mesh_paths: Dict
     ) -> Dict:
         """
         Check if skill succeeded.
 
-        Template implementation - always returns False.
-        To be implemented with actual success checking logic.
-
         Args:
-            skill_name: Full skill name (e.g., "pick black bowl")
-            skill_type: Skill category ("pick", "place", "open", "close", etc.)
-            target_object: Object involved in skill
-            initial_state: Initial object state before skill
-            final_state: Final object state after skill
+            success_check_type: "object_lifted" or "object_on_target"
+            skill_info: From task_config (has target_object, grasp_object, etc.)
+            initial_states: {object_name: {"position": [x,y,z]}}
+            current_states: {object_name: {"position": [x,y,z]}}
+            mesh_paths: {object_name: "/path/to/mesh.obj"}
 
         Returns:
             Dict with:
-                - success: bool (always False in template)
+                - success: bool
                 - confidence: float (0-1)
                 - reason: str (explanation)
                 - metrics: dict (measurements)
         """
-        print(f"\n🔍 Checking success for '{skill_name}' ({skill_type})...")
-
-        if skill_type == "pick":
-            return self._check_pick_success(target_object, initial_state, final_state)
-        elif skill_type == "place":
-            return self._check_place_success(target_object, initial_state, final_state)
-        elif skill_type in ["open", "close"]:
-            return self._check_articulated_success(target_object, skill_type)
-        elif skill_type in ["turn_on", "turn_off"]:
-            return self._check_turn_on_off_success(target_object, skill_type)
+        if success_check_type == "object_lifted":
+            return self._check_object_lifted(skill_info, initial_states, current_states)
+        elif success_check_type == "object_on_target":
+            return self._check_object_on_target(skill_info, initial_states, current_states, mesh_paths)
         else:
-            print(f"   ⚠️  Unknown skill type: {skill_type}")
             return {
                 "success": False,
                 "confidence": 0.0,
-                "reason": f"Unknown skill type: {skill_type}",
+                "reason": f"Unknown success check type: {success_check_type}",
                 "metrics": {}
             }
 
-    def _check_pick_success(
+    def _check_object_lifted(
         self,
-        target_object: str,
-        initial_state: Optional[Dict],
-        final_state: Optional[Dict]
+        skill_info: Dict,
+        initial_states: Dict,
+        current_states: Dict
     ) -> Dict:
         """
-        Check pick skill success.
-
-        Template - always returns False. To be implemented.
+        Check if object lifted above initial height.
 
         Args:
-            target_object: Object name
-            initial_state: Initial object pose before pick
-            final_state: Final object pose after pick
+            skill_info: Contains "target_object"
+            initial_states: Initial positions
+            current_states: Current positions
 
         Returns:
-            Success dict (always False)
+            Success dict with metrics
         """
-        print(f"   ❌ FAILED (template - not implemented)")
+        target_object = skill_info["target_object"]
+
+        if target_object not in initial_states or target_object not in current_states:
+            return {
+                "success": False,
+                "confidence": 0.0,
+                "reason": f"Missing state data for {target_object}",
+                "metrics": {}
+            }
+
+        initial_z = initial_states[target_object]["position"][2]
+        current_z = current_states[target_object]["position"][2]
+        height_increase = current_z - initial_z
+
+        success = height_increase >= self.min_height_increase
+
         return {
-            "success": False,
-            "confidence": 0.0,
-            "reason": "Success checking not implemented (template)",
-            "metrics": {}
+            "success": success,
+            "confidence": 1.0 if success else 0.0,
+            "reason": f"Height increase: {height_increase:.4f}m (threshold: {self.min_height_increase}m)",
+            "metrics": {
+                "initial_z": float(initial_z),
+                "current_z": float(current_z),
+                "height_increase": float(height_increase),
+                "threshold": self.min_height_increase
+            }
         }
 
-    def _check_place_success(
+    def _check_object_on_target(
         self,
-        target_object: str,
-        initial_state: Optional[Dict],
-        final_state: Optional[Dict]
+        skill_info: Dict,
+        initial_states: Dict,
+        current_states: Dict,
+        mesh_paths: Dict
     ) -> Dict:
         """
-        Check place skill success.
+        Check if grasp_object placed on target_object.
 
-        Template - always returns False. To be implemented.
-
-        Args:
-            target_object: Object name
-            initial_state: Initial object pose before place
-            final_state: Final object pose after place
-
-        Returns:
-            Success dict (always False)
-        """
-        print(f"   ❌ FAILED (template - not implemented)")
-        return {
-            "success": False,
-            "confidence": 0.0,
-            "reason": "Success checking not implemented (template)",
-            "metrics": {}
-        }
-
-    def _check_articulated_success(
-        self,
-        target_object: str,
-        skill_type: str
-    ) -> Dict:
-        """
-        Check open/close skill success.
-
-        Template - always returns False. To be implemented.
+        Checks:
+        1. XY distance < xy_distance_threshold (5cm)
+        2. Z distance < half_longest_edge + z_buffer_distance
 
         Args:
-            target_object: Drawer/cabinet name
-            skill_type: "open" or "close"
+            skill_info: Contains "target_object" and "grasp_object"
+            initial_states: Initial positions
+            current_states: Current positions
+            mesh_paths: Mesh file paths
 
         Returns:
-            Success dict (always False)
+            Success dict with metrics
         """
-        print(f"   ❌ FAILED (template - not implemented)")
+        target_object = skill_info["target_object"]
+
+        # Validate grasp_object exists
+        if "grasp_object" not in skill_info:
+            raise ValueError(f"skill_info must contain 'grasp_object' for object_on_target check. Got: {skill_info.keys()}")
+
+        grasp_object = skill_info["grasp_object"]
+
+        # Check state data exists
+        if target_object not in current_states or grasp_object not in current_states:
+            return {
+                "success": False,
+                "confidence": 0.0,
+                "reason": f"Missing state data for {target_object} or {grasp_object}",
+                "metrics": {}
+            }
+
+        target_pos = np.array(current_states[target_object]["position"])
+        grasp_pos = np.array(current_states[grasp_object]["position"])
+
+        # Check 1: XY distance
+        xy_distance = np.linalg.norm(target_pos[:2] - grasp_pos[:2])
+        xy_check = xy_distance < self.xy_distance_threshold
+
+        # Check 2: Z distance (load mesh to get half_longest_edge)
+        if grasp_object not in mesh_paths:
+            return {
+                "success": False,
+                "confidence": 0.0,
+                "reason": f"Mesh path not found for {grasp_object}",
+                "metrics": {}
+            }
+
+        mesh = trimesh.load(mesh_paths[grasp_object])
+        bbox_min = mesh.vertices.min(axis=0)
+        bbox_max = mesh.vertices.max(axis=0)
+        extents = bbox_max - bbox_min
+        longest_edge = extents.max()
+        half_longest_edge = longest_edge / 2.0
+
+        z_distance = abs(target_pos[2] - grasp_pos[2])
+        z_threshold = half_longest_edge + self.z_buffer_distance
+        z_check = z_distance < z_threshold
+
+        success = xy_check and z_check
+
         return {
-            "success": False,
-            "confidence": 0.0,
-            "reason": "Success checking not implemented (template)",
-            "metrics": {}
-        }
-
-    def _check_turn_on_off_success(
-        self,
-        target_object: str,
-        skill_type: str
-    ) -> Dict:
-        """
-        Check turn_on/turn_off skill success.
-
-        Template - always returns False. To be implemented.
-
-        Args:
-            target_object: Stove/appliance name
-            skill_type: "turn_on" or "turn_off"
-
-        Returns:
-            Success dict (always False)
-        """
-        print(f"   ❌ FAILED (template - not implemented)")
-        return {
-            "success": False,
-            "confidence": 0.0,
-            "reason": "Success checking not implemented (template)",
-            "metrics": {}
+            "success": success,
+            "confidence": 1.0 if success else 0.0,
+            "reason": f"XY: {xy_distance:.4f}m (<{self.xy_distance_threshold}m: {xy_check}), Z: {z_distance:.4f}m (<{z_threshold:.4f}m: {z_check})",
+            "metrics": {
+                "xy_distance": float(xy_distance),
+                "xy_threshold": self.xy_distance_threshold,
+                "xy_check": xy_check,
+                "z_distance": float(z_distance),
+                "z_threshold": float(z_threshold),
+                "z_check": z_check,
+                "half_longest_edge": float(half_longest_edge)
+            }
         }
 
 
@@ -195,20 +220,25 @@ if __name__ == "__main__":
     print("Testing SuccessChecker...\n")
 
     config = {
-        "pick": {"min_height_increase": 0.03, "stable_timeout": 2.0},
-        "place": {"xy_distance_threshold": 0.05, "z_height_tolerance": 0.02}
+        "object_lifted": {"min_height_increase": 0.03},
+        "object_on_target": {"xy_distance_threshold": 0.05, "z_buffer_distance": 0.03}
     }
 
     checker = SuccessChecker(config)
 
-    # Test pick success
-    initial_state = {
-        "position": np.array([0.4, 0.0, 0.10])
-    }
-    final_state = {
-        "position": np.array([0.4, 0.0, 0.15])
-    }
+    # Test 1: object_lifted - success
+    print("\n=== Test 1: object_lifted (success) ===")
+    skill_info = {"target_object": "red_cup"}
+    initial_states = {"red_cup": {"position": np.array([0.4, 0.0, 0.10])}}
+    current_states = {"red_cup": {"position": np.array([0.4, 0.0, 0.15])}}
 
-    result = checker.check_skill_success("pick black bowl", "pick", "black_bowl", initial_state, final_state)
-    print(f"\nPick result: {result}")
-    print("\n✓ SuccessChecker test complete (template mode)")
+    result = checker.check_success("object_lifted", skill_info, initial_states, current_states, {})
+    print(f"Result: {result}")
+
+    # Test 2: object_lifted - fail
+    print("\n=== Test 2: object_lifted (fail) ===")
+    current_states = {"red_cup": {"position": np.array([0.4, 0.0, 0.12])}}
+    result = checker.check_success("object_lifted", skill_info, initial_states, current_states, {})
+    print(f"Result: {result}")
+
+    print("\n✓ SuccessChecker test complete")

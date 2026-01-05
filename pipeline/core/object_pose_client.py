@@ -155,6 +155,7 @@ class ObjectPoseClient:
 
     def get_pose(
         self,
+        object_name: str,
         rgb: np.ndarray,
         depth: np.ndarray,
         K: np.ndarray,
@@ -164,6 +165,7 @@ class ObjectPoseClient:
         Get current tracked object pose.
 
         Args:
+            object_name: Object identifier
             rgb: RGB image (H, W, 3) uint8
             depth: Depth image (H, W) float32 in meters
             K: Camera intrinsics (3, 3)
@@ -180,6 +182,7 @@ class ObjectPoseClient:
         """
         request = {
             'api': 'get_pose',
+            'object_name': object_name,
             'rgb': rgb,
             'depth': depth,
             'K': K,
@@ -197,9 +200,12 @@ class ObjectPoseClient:
             print(f"✗ Get pose error: {e}")
             return None
 
-    def end_tracking(self) -> Optional[Dict]:
+    def end_tracking(self, object_name: str = None) -> Optional[Dict]:
         """
         Stop tracking and free resources.
+
+        Args:
+            object_name: Object to stop tracking (None = stop all)
 
         Returns:
             {
@@ -209,7 +215,8 @@ class ObjectPoseClient:
             or None on error
         """
         request = {
-            'api': 'end_tracking'
+            'api': 'end_tracking',
+            'object_name': object_name
         }
 
         try:
