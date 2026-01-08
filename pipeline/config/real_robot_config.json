@@ -1,6 +1,18 @@
 {
   "_comment": "Hardware and deployment configuration for real robot pipeline",
 
+  "is_randome_erasing": true,
+  "is_relative_pose": true,
+  "is_visual_ref_yoloe": false,
+
+  "yoloe_visual_server": {
+    "host": "localhost",
+    "port": 5559,
+    "_comment": "YOLOE visual prompt server for visual reference mode"
+  },
+
+  "yoloe_visual_ref_dir": "pipeline/data/yoloe_ref_images/yoloe_ref_images_3rd_view",
+
   "cameras": {
     "left_camera_id": "36087771",
     "right_camera_id": "",
@@ -29,29 +41,39 @@
 
   "object_meshes": {
     "red_cup": "/home/yygx/PANDA/pipeline/data/meshes/red_cup/mesh.obj",
-    "black_bowl": "/home/yygx/PANDA/pipeline/data/meshes/black_bowl/mesh.obj",
     "plate": "/home/yygx/PANDA/pipeline/data/meshes/plate/mesh.obj",
+    "basket": "/home/yygx/PANDA/pipeline/data/meshes/basket/mesh.obj",
+    "corn": "/home/yygx/PANDA/pipeline/data/meshes/corn/mesh.obj",
+    "mayo": "/home/yygx/PANDA/pipeline/data/meshes/mayo/mesh.obj",
+    "parmesan_cheese": "/home/yygx/PANDA/pipeline/data/meshes/parmesan_cheese/mesh.obj",
+    "peaches_can": "/home/yygx/PANDA/pipeline/data/meshes/peaches_can/mesh.obj",
+    "yellow_mustard": "/home/yygx/PANDA/pipeline/data/meshes/yellow_mustard/mesh.obj",
     "_comment": "Paths to object mesh files for FoundationPose"
   },
 
   "yoloe_prompts": {
-    "red_cup": "red cup",
-    "black_bowl": "black bowl",
-    "plate": "plate",
+    "red_cup": "red plastic solo cup",
+    "plate": "blue and white plate",
+    "basket": "white rectangular basket",
+    "corn": "yellowcorn can",
+    "mayo": "white and blue mayo bottle",
+    "parmesan_cheese": "tall green cylindrical parmesan can",
+    "peaches_can": "small red can",
+    "yellow_mustard": "yellow mustard bottle",
     "_comment": "YOLOE text prompts for each object"
   },
 
   "registration": {
     "save_debug": true,
     "debug_dir": "/home/yygx/PANDA/pipeline/data/registration",
-    "registration_iteration": 1,
+    "registration_iteration": 3,
     "registration_conf": 0.1,
     "_comment": "Registration settings and debug save directory"
   },
 
   "vla_server": {
     "host": "localhost",
-    "port": 8008,
+    "port": 8009,
     "_comment": "Point to the IP address of the VLA policy server (e.g., GPU server)"
   },
 
@@ -65,7 +87,7 @@
   },
 
   "above_pose": {
-    "default_height": 0.10,
+    "default_height": 0.1,
     "object_specific": {},
     "_comment": "Default height above object. object_specific is placeholder for future custom handling."
   },

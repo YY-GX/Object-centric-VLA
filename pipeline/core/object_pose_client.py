@@ -57,7 +57,9 @@ class ObjectPoseClient:
         debug_dir: str,
         conf: float = 0.1,
         iteration: int = 1,
-        debug: int = 0
+        debug: int = 0,
+        use_visual_ref: bool = False,
+        visual_ref_object_name: str = None
     ) -> Optional[Dict]:
         """
         Register object: segment and estimate initial 6D pose.
@@ -67,12 +69,14 @@ class ObjectPoseClient:
             depth: Depth image (H, W) float32 in meters
             K: Camera intrinsics (3, 3)
             object_name: Object identifier (e.g., "red_cup")
-            yoloe_prompt: Text prompt for YOLOE (e.g., "red cup")
+            yoloe_prompt: Text prompt for YOLOE (e.g., "red cup") - used when use_visual_ref=False
             mesh_path: Path to object mesh file
             debug_dir: Directory to save debug images
             conf: YOLOE confidence threshold
             iteration: Registration refinement iterations
             debug: Debug level (0-2)
+            use_visual_ref: If True, use visual reference instead of text prompt
+            visual_ref_object_name: Object name for visual reference lookup (defaults to object_name)
 
         Returns:
             {
@@ -96,7 +100,9 @@ class ObjectPoseClient:
             'debug_dir': debug_dir,
             'conf': conf,
             'iteration': iteration,
-            'debug': debug
+            'debug': debug,
+            'use_visual_ref': use_visual_ref,
+            'visual_ref_object_name': visual_ref_object_name or object_name
         }
 
         try:

@@ -8,7 +8,8 @@
       "name": "pick the red cup",
       "skills": [
         "pick red cup"
-      ]
+      ],
+      "scene_objects": ["red_cup"]
     },
     {
       "task_id": 2,
@@ -16,7 +17,16 @@
       "skills": [
         "pick red cup",
         "place red cup on plate"
-      ]
+      ],
+      "scene_objects": ["red_cup", "plate", "parmesan_cheese"]
+    },
+    {
+      "task_id": 3,
+      "name": "pick the plate",
+      "skills": [
+        "pick plate"
+      ],
+      "scene_objects": ["plate"]
     }
   ],
 
@@ -33,6 +43,12 @@
       "language": "place red cup on plate",
       "skill_type": "place",
       "success_check": "object_on_target"
+    },
+    "pick plate": {
+      "target_object": "plate",
+      "language": "pick the plate",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
     }
   },
 

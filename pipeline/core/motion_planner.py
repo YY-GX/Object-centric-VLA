@@ -12,7 +12,11 @@ Supports multiple motion planning methods:
 
 import time
 import numpy as np
-from typing import Dict, Optional, Literal
+from typing import Dict, Optional
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
 from scipy.spatial.transform import Rotation as R, Slerp
 import sys
 import os
@@ -25,6 +29,23 @@ try:
 except ImportError:
     print("⚠️  Warning: Could not import RobotEnv. Motion planner may not work on this machine.")
     RobotEnv = None
+
+
+def compute_orientation_error(target_euler: np.ndarray, current_euler: np.ndarray) -> float:
+    """
+    Compute orientation error handling euler angle wrapping at ±π.
+
+    Args:
+        target_euler: Target euler angles [roll, pitch, yaw]
+        current_euler: Current euler angles [roll, pitch, yaw]
+
+    Returns:
+        L2 norm of wrapped angle differences
+    """
+    diff = target_euler - current_euler
+    # Wrap each angle difference to [-π, π]
+    diff = (diff + np.pi) % (2 * np.pi) - np.pi
+    return np.linalg.norm(diff)
 
 
 class MotionPlanner:
@@ -157,8 +178,8 @@ class MotionPlanner:
         final_pose = self.get_current_ee_pose()
         final_distance = np.linalg.norm(target_pos - final_pose["position"])
 
-        # Compute orientation error (L2 norm of euler angle difference)
-        orientation_error = np.linalg.norm(target_euler - final_pose["orientation_euler"])
+        # Compute orientation error (with angle wrapping)
+        orientation_error = compute_orientation_error(target_euler, final_pose["orientation_euler"])
 
         success = (final_distance < self.position_threshold and
                    orientation_error < self.orientation_threshold)
@@ -182,21 +203,17 @@ class MotionPlanner:
     def CLI_MP(
         self,
         target_pose: Dict,
-        num_steps: int = 200,
-        pos_gain: float = 3.0,
-        ori_gain: float = 3.0
+        num_steps: int = 10
     ) -> Dict:
         """
         Cartesian Linear Interpolation Motion Planning.
 
-        Uses linear interpolation for position, SLERP for orientation,
-        with closed-loop delta control via cartesian_velocity.
+        Uses linear interpolation for position, SLERP for orientation.
+        Sends absolute poses via cartesian_position action space.
 
         Args:
-            target_pose: Target pose dict
+            target_pose: Target pose dict with position, orientation_euler, gripper
             num_steps: Number of interpolation steps
-            pos_gain: Position gain for delta control
-            ori_gain: Orientation gain for delta control
 
         Returns:
             Dict with success, final_distance, execution_time
@@ -205,7 +222,7 @@ class MotionPlanner:
         target_euler = np.array(target_pose["orientation_euler"])
         target_gripper = target_pose.get("gripper", None)
 
-        print(f"🎯 Cartesian Linear Interpolation ({num_steps} steps, gains: pos={pos_gain}, ori={ori_gain})")
+        print(f"🎯 Cartesian Linear Interpolation ({num_steps} steps)")
         print(f"   Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}], euler=[{target_euler[0]:.3f}, {target_euler[1]:.3f}, {target_euler[2]:.3f}]")
 
         start_time = time.time()
@@ -225,30 +242,26 @@ class MotionPlanner:
         key_rotations = R.from_quat([current_quat, target_quat])
         slerp = Slerp([0, 1], key_rotations)
 
-        # Execute interpolated motion with delta control
+        # Execute interpolated motion with absolute poses
         for i in range(num_steps):
             t = (i + 1) / num_steps
 
-            # Interpolate target
+            # Interpolate target position and orientation
             interp_pos = current_pos + t * (target_pos - current_pos)
             interp_rot = slerp(t)
             interp_euler = interp_rot.as_euler('xyz')
 
-            # Get current pose
-            curr = self.get_current_ee_pose()
+            # Construct absolute pose action: [x, y, z, roll, pitch, yaw, gripper]
+            action = np.concatenate([interp_pos, interp_euler, [target_gripper]])
 
-            # Compute delta
-            delta_pos = pos_gain * (interp_pos - curr["position"])
-            delta_euler = ori_gain * (interp_euler - curr["orientation_euler"])
-
-            # Clip deltas for safety
-            delta_pos = np.clip(delta_pos, -0.05, 0.05)  # Max 5cm per step
-            delta_euler = np.clip(delta_euler, -0.1, 0.1)  # Max ~6deg per step
-
-            # Execute step
-            action = np.concatenate([delta_pos, delta_euler, [target_gripper]])
+            # Execute using cartesian_position action space
             try:
-                self.robot_env.step(action)
+                self.robot_env.update_robot(
+                    action,
+                    action_space="cartesian_position",
+                    gripper_action_space="position",
+                    blocking=True
+                )
             except Exception as e:
                 print(f"❌ CLI_MP failed at step {i}: {e}")
                 return {
@@ -260,8 +273,9 @@ class MotionPlanner:
                 }
 
             # Early stopping check
+            curr = self.get_current_ee_pose()
             pos_error = np.linalg.norm(target_pos - curr["position"])
-            ori_error = np.linalg.norm(target_euler - curr["orientation_euler"])
+            ori_error = compute_orientation_error(target_euler, curr["orientation_euler"])
             if pos_error < self.position_threshold and ori_error < self.orientation_threshold:
                 print(f"   ✅ Converged early at step {i+1}/{num_steps}")
                 break
@@ -271,7 +285,7 @@ class MotionPlanner:
         # Final convergence check
         final_pose = self.get_current_ee_pose()
         final_distance = np.linalg.norm(target_pos - final_pose["position"])
-        orientation_error = np.linalg.norm(target_euler - final_pose["orientation_euler"])
+        orientation_error = compute_orientation_error(target_euler, final_pose["orientation_euler"])
         success = (final_distance < self.position_threshold and orientation_error < self.orientation_threshold)
 
         if success:

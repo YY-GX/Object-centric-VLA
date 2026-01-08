@@ -26,7 +26,7 @@ class TargetPoseCalculator:
     REST_EULER = np.array([np.pi, 0.0, 0.0])
 
     # Gripper length from panda_link8 (flange) to gripper tip (meters)
-    GRIPPER_LENGTH = 0.015
+    GRIPPER_LENGTH = 0.2
 
     def __init__(self, config: Dict):
         """
@@ -75,13 +75,14 @@ class TargetPoseCalculator:
             above_height = self.default_height
 
         # Calculate half of longest edge from mesh vertices
-        half_longest_edge = 0.0
-        if mesh_vertices is not None:
-            bbox_min = mesh_vertices.min(axis=0)
-            bbox_max = mesh_vertices.max(axis=0)
-            extents = bbox_max - bbox_min  # [x_size, y_size, z_size]
-            longest_edge = extents.max()
-            half_longest_edge = longest_edge / 2.0
+        half_longest_edge = 0.05
+        # yy: hardcoded half_longest_edge - cuz it is not robust to extract from mesh vertices
+        # if mesh_vertices is not None:
+        #     bbox_min = mesh_vertices.min(axis=0)
+        #     bbox_max = mesh_vertices.max(axis=0)
+        #     extents = bbox_max - bbox_min  # [x_size, y_size, z_size]
+        #     longest_edge = extents.max()
+        #     half_longest_edge = longest_edge / 2.0
 
         # Total height offset = default_height + half_longest_edge + gripper_length
         total_height = above_height + half_longest_edge + self.GRIPPER_LENGTH

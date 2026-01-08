@@ -174,12 +174,20 @@ class CSVLogger:
         cartesian = state["cartesian_position"]
         gripper = state["gripper_position"]
 
+        # Convert to list if numpy array
+        if hasattr(cartesian, 'tolist'):
+            cartesian = cartesian.tolist()
+        if hasattr(gripper, '__getitem__'):
+            gripper_val = float(gripper[0]) if hasattr(gripper, '__len__') and len(gripper) > 0 else float(gripper)
+        else:
+            gripper_val = float(gripper)
+
         if len(cartesian) == 6:
             # Full 6D state
-            state_row = [timestep] + cartesian.tolist() + [float(gripper[0])]
+            state_row = [timestep] + cartesian + [gripper_val]
         else:
             # Only 3D position (pad with zeros for orientation)
-            state_row = [timestep] + cartesian[:3].tolist() + [0.0, 0.0, 0.0, float(gripper[0])]
+            state_row = [timestep] + cartesian[:3] + [0.0, 0.0, 0.0, gripper_val]
 
         self.state_writer.writerow(state_row)
 

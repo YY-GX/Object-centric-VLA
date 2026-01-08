@@ -22,6 +22,7 @@ import sys
 import os
 from scipy.spatial.transform import Rotation as R
 import trimesh
+import cv2
 
 # DROID data collection frequency -- we slow down execution to match this frequency
 DROID_CONTROL_FREQUENCY = 15
@@ -39,6 +40,7 @@ from core import (
     SuccessChecker,
     VLAClient
 )
+from core.yoloe_obj_detector_client import YOLOEObjectDetectorClient
 from utils import (
     load_task_config,
     plan_task_sequence,
@@ -230,24 +232,206 @@ class RealRobotPipeline:
         else:
             self.video_recorder = None
 
+        # YOLOE client for distractor detection (if random erasing enabled)
+        self.yoloe_client = None
+        self.yoloe_text_prompts = None  # For text mode
+        if self.robot_config.get("is_randome_erasing", False):
+            use_visual_ref = self.robot_config.get("is_visual_ref_yoloe", False)
+            if use_visual_ref:
+                # Visual mode: use port 5559
+                self.yoloe_client = YOLOEObjectDetectorClient(
+                    host="localhost",
+                    port=5559,
+                    mode="visual"
+                )
+                print(f"✅ YOLOE client initialized (visual mode, port 5559)")
+            else:
+                # Text mode: use port 5557
+                self.yoloe_client = YOLOEObjectDetectorClient(
+                    host="localhost",
+                    port=5557,
+                    mode="text"
+                )
+                # Store text prompts for distractor detection
+                self.yoloe_text_prompts = self.robot_config.get("yoloe_prompts", {})
+                print(f"✅ YOLOE client initialized (text mode, port 5557)")
+
         # Run registration phase
         print(f"\n{'='*80}")
         print(f"🎯 REGISTRATION PHASE")
         print(f"{'='*80}\n")
         self._run_registration_phase()
 
-        # # Print registration results
-        # print(f"\n{'='*80}")
-        # print(f"📊 REGISTRATION RESULTS (World/Base Coordinates)")
-        # print(f"{'='*80}")
-        # for obj_name, obj_data in self.registration_dict.items():
-        #     pose_base = obj_data["pose_base"]
-        #     position = pose_base[:3, 3]
-        #     print(f"\n{obj_name}:")
-        #     print(f"  Position (x, y, z): [{position[0]:.4f}, {position[1]:.4f}, {position[2]:.4f}]")
-        #     print(f"  Full pose matrix (base frame):")
-        #     print(f"{pose_base}")
-        # print(f"\n{'='*80}\n")
+        # Print registration results
+        print(f"\n{'='*80}")
+        print(f"📊 REGISTRATION RESULTS (World/Base Coordinates)")
+        print(f"{'='*80}")
+        for obj_name, obj_data in self.registration_dict.items():
+            pose_base = obj_data["pose_base"]
+            position = pose_base[:3, 3]
+            print(f"\n{obj_name}:")
+            print(f"  Position (x, y, z): [{position[0]:.4f}, {position[1]:.4f}, {position[2]:.4f}]")
+            print(f"  Full pose matrix (base frame):")
+            print(f"{pose_base}")
+        print(f"\n{'='*80}\n")
+        exit(0)
+
+    def _register_visual_references(self, objects: set):
+        """
+        Pre-register visual reference images to YOLOE visual server.
+
+        Loads reference images from yoloe_visual_ref_dir and registers them
+        with bounding boxes from bboxes.json.
+
+        Args:
+            objects: Set of object names to register
+        """
+        import cv2
+
+        visual_ref_dir = self.robot_config.get("yoloe_visual_ref_dir", "")
+        if not visual_ref_dir:
+            print("⚠️  yoloe_visual_ref_dir not configured, skipping visual ref registration")
+            return
+
+        # Resolve path relative to pipeline root
+        if not os.path.isabs(visual_ref_dir):
+            visual_ref_dir = str(Path(__file__).parent.parent / visual_ref_dir)
+
+        visual_ref_path = Path(visual_ref_dir)
+        if not visual_ref_path.exists():
+            print(f"⚠️  Visual ref directory not found: {visual_ref_path}")
+            return
+
+        # Load bboxes.json if exists
+        bboxes_file = visual_ref_path / "bboxes.json"
+        bboxes = {}
+        if bboxes_file.exists():
+            with open(bboxes_file, 'r') as f:
+                bboxes = json.load(f)
+            print(f"✓ Loaded bboxes from {bboxes_file}")
+
+        # Connect to YOLOE visual server
+        visual_server_config = self.robot_config.get("yoloe_visual_server", {})
+        visual_host = visual_server_config.get("host", "localhost")
+        visual_port = visual_server_config.get("port", 5559)
+
+        print(f"\n📷 Pre-registering visual references to YOLOE visual server ({visual_host}:{visual_port})...")
+
+        visual_client = YOLOEObjectDetectorClient(host=visual_host, port=visual_port)
+
+        try:
+            for obj_name in objects:
+                # Find reference images for this object (format: objname_0.jpg, objname_1.jpg, etc.)
+                ref_images = sorted(visual_ref_path.glob(f"{obj_name}_*.jpg"))
+                if not ref_images:
+                    ref_images = sorted(visual_ref_path.glob(f"{obj_name}_*.png"))
+
+                if not ref_images:
+                    print(f"  ⚠️  No visual references found for '{obj_name}'")
+                    continue
+
+                for ref_img_path in ref_images:
+                    ref_name = ref_img_path.stem  # e.g., "red_cup_0"
+
+                    # Load image
+                    img = cv2.imread(str(ref_img_path))
+                    if img is None:
+                        print(f"  ⚠️  Failed to load {ref_img_path}")
+                        continue
+                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+                    # Get bbox if available
+                    bbox = bboxes.get(ref_name, None)
+
+                    # Register to visual server
+                    response = visual_client.register(
+                        object_name=ref_name,
+                        image=img_rgb,
+                        bbox=bbox
+                    )
+
+                    if response.get('success', False):
+                        print(f"  ✓ Registered '{ref_name}' (bbox: {bbox})")
+                    else:
+                        print(f"  ✗ Failed to register '{ref_name}': {response.get('error', 'unknown')}")
+
+        finally:
+            visual_client.close()
+
+        print(f"✓ Visual reference registration complete\n")
+
+    def _register_wrist_visual_references(self):
+        """
+        Register wrist-view visual references for distractor detection.
+
+        Loads reference images from pipeline/data/yoloe_ref_images/ (wrist view)
+        and registers them to YOLOE visual server using self.yoloe_client.
+
+        Called when is_visual_ref_yoloe=True and is_randome_erasing=True.
+        """
+        import cv2
+
+        # Use default wrist ref directory
+        wrist_ref_dir = Path(__file__).parent / "data" / "yoloe_ref_images"
+        if not wrist_ref_dir.exists():
+            print(f"⚠️  Wrist visual ref directory not found: {wrist_ref_dir}")
+            return
+
+        # Load bboxes.json
+        bboxes_file = wrist_ref_dir / "bboxes.json"
+        bboxes = {}
+        if bboxes_file.exists():
+            with open(bboxes_file, 'r') as f:
+                bboxes = json.load(f)
+
+        print(f"\n📷 Registering wrist-view visual references...")
+
+        # Get all scene objects from current task
+        task_info = None
+        for task in self.task_config.get("long_horizon_tasks", []):
+            if task["name"] == self.task_name:
+                task_info = task
+                break
+
+        if task_info is None:
+            print(f"⚠️  Task not found, skipping wrist ref registration")
+            return
+
+        scene_objects = set(task_info.get("scene_objects", []))
+        print(f"  Scene objects: {scene_objects}")
+
+        for obj_name in scene_objects:
+            # Find reference images for this object
+            ref_images = sorted(wrist_ref_dir.glob(f"{obj_name}_*.jpg"))
+            if not ref_images:
+                ref_images = sorted(wrist_ref_dir.glob(f"{obj_name}_*.png"))
+
+            if not ref_images:
+                print(f"  ⚠️  No wrist refs found for '{obj_name}'")
+                continue
+
+            for ref_img_path in ref_images:
+                ref_name = ref_img_path.stem
+
+                img = cv2.imread(str(ref_img_path))
+                if img is None:
+                    continue
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+                bbox = bboxes.get(ref_name, None)
+
+                response = self.yoloe_client.register(
+                    object_name=ref_name,
+                    image=img_rgb,
+                    bbox=bbox
+                )
+
+                if response.get('success', False):
+                    print(f"  ✓ Registered '{ref_name}'")
+                else:
+                    print(f"  ✗ Failed: '{ref_name}': {response.get('error', 'unknown')}")
+
+        print(f"✓ Wrist visual reference registration complete\n")
 
     def _run_registration_phase(self):
         """
@@ -268,6 +452,18 @@ class RealRobotPipeline:
                 unique_objects.add(skill_info["target_object"])
 
         print(f"Objects to register: {list(unique_objects)}\n")
+
+        # Check if using visual reference mode
+        use_visual_ref = self.robot_config.get("is_visual_ref_yoloe", False)
+        if use_visual_ref:
+            print(f"🎯 Visual Reference Mode ENABLED")
+            # Pre-register 3rd-view visual references for FoundationPose
+            self._register_visual_references(unique_objects)
+            # Pre-register wrist-view visual references for distractor detection
+            if self.yoloe_client is not None:
+                self._register_wrist_visual_references()
+        else:
+            print(f"📝 Text Prompt Mode (default)")
 
         # Initialize registration dict
         self.registration_dict = {}
@@ -318,7 +514,12 @@ class RealRobotPipeline:
 
             # Call registration
             print(f"🔧 Running registration...")
-            print(f"  YOLOE prompt: '{yoloe_prompt}'")
+            if use_visual_ref:
+                print(f"  Mode: Visual Reference")
+                print(f"  Visual ref object: '{object_name}'")
+            else:
+                print(f"  Mode: Text Prompt")
+                print(f"  YOLOE prompt: '{yoloe_prompt}'")
             print(f"  Mesh: {mesh_path}\n")
 
             result = self.object_pose_client.register(
@@ -331,7 +532,9 @@ class RealRobotPipeline:
                 debug_dir=str(debug_dir),
                 conf=reg_config.get("registration_conf", 0.1),
                 iteration=reg_config.get("registration_iteration", 1),
-                debug=0
+                debug=0,
+                use_visual_ref=use_visual_ref,
+                visual_ref_object_name=object_name
             )
 
             if result is None or not result["success"]:
@@ -410,6 +613,42 @@ class RealRobotPipeline:
 
         return objects
 
+    def _get_distractor_objects(self, skill_info: Dict) -> List[str]:
+        """
+        Get list of distractor objects for random erasing.
+
+        Distractors are objects in scene_objects that are NOT:
+        - The current skill's target_object
+        - The current skill's grasp_object (if any)
+
+        Args:
+            skill_info: Skill information from task config
+
+        Returns:
+            List of distractor object names
+        """
+        # Get scene_objects from current task
+        task_info = None
+        for task in self.task_config.get("long_horizon_tasks", []):
+            if task["name"] == self.task_name:
+                task_info = task
+                break
+
+        if task_info is None:
+            return []
+
+        scene_objects = set(task_info.get("scene_objects", []))
+
+        # Remove target_object and grasp_object
+        exclude = set()
+        if "target_object" in skill_info:
+            exclude.add(skill_info["target_object"])
+        if "grasp_object" in skill_info:
+            exclude.add(skill_info["grasp_object"])
+
+        distractors = list(scene_objects - exclude)
+        return distractors
+
     def _should_keep_tracking(self, object_name: str, current_skill_idx: int) -> bool:
         """
         Check if object should continue being tracked after current skill.
@@ -448,7 +687,9 @@ class RealRobotPipeline:
             4. Execute VLA skill
             5. Move EE up
             6. Check success
-            7. Retry on failure
+            7. Retry on failure with recovery logic:
+               - Pick failure: re-obtain pose, recalculate, MP, VLA
+               - Place failure: re-do pick first, then place
 
         Args:
             max_retries: Maximum retries per skill
@@ -468,6 +709,9 @@ class RealRobotPipeline:
 
         # Track initial object states
         initial_states = {}
+
+        # Track previous pick skill for place recovery
+        previous_pick_skill_info = None
 
         success_count = 0
         total_skills = len(self.skill_sequence)
@@ -489,34 +733,72 @@ class RealRobotPipeline:
 
             # Execute skill with retry logic
             skill_success = False
-            for retry in range(max_retries):
-                if retry > 0:
-                    print(f"\n🔄 Retry {retry}/{max_retries-1}")
 
-                result = self._execute_single_skill(
-                    skill_info=skill_info,
-                    skill_idx=skill_idx - 1,  # Convert to 0-indexed
-                    initial_states=initial_states,
-                    csv_logger=csv_logger
-                )
+            # First attempt: use normal execution
+            result = self._execute_single_skill(
+                skill_info=skill_info,
+                skill_idx=skill_idx - 1,  # Convert to 0-indexed
+                initial_states=initial_states,
+                csv_logger=csv_logger
+            )
 
-                if result["success"]:
-                    skill_success = True
-                    # Update initial states for next skill (handles multiple objects)
-                    if "final_object_poses" in result:
-                        initial_states.update(result["final_object_poses"])
-                    break
-                else:
-                    print(f"❌ Skill failed: {result['reason']}")
-                    if retry < max_retries - 1:
-                        print(f"   Retrying in 2 seconds...")
-                        time.sleep(2.0)
+            if result["success"]:
+                skill_success = True
+                if "final_object_poses" in result:
+                    initial_states.update(result["final_object_poses"])
+            else:
+                print(f"❌ Skill failed: {result['reason']}")
+
+                # Retry with recovery logic
+                for retry in range(1, max_retries):
+                    print(f"\n🔄 Recovery Retry {retry}/{max_retries-1}")
+                    time.sleep(2.0)
+
+                    if skill_type == "pick":
+                        # Pick failure: re-obtain pose, recalculate above, MP, VLA
+                        result = self._retry_pick_skill(
+                            skill_info=skill_info,
+                            initial_states=initial_states,
+                            csv_logger=csv_logger
+                        )
+                    elif skill_type == "place":
+                        # Place failure: re-do pick first, then place
+                        if previous_pick_skill_info is None:
+                            print(f"❌ No previous pick skill found for place recovery")
+                            result = {"success": False, "reason": "No previous pick skill"}
+                        else:
+                            result = self._retry_place_skill(
+                                place_skill_info=skill_info,
+                                pick_skill_info=previous_pick_skill_info,
+                                initial_states=initial_states,
+                                csv_logger=csv_logger
+                            )
+                    else:
+                        # Unknown skill type: just retry normal execution
+                        result = self._execute_single_skill(
+                            skill_info=skill_info,
+                            skill_idx=skill_idx - 1,
+                            initial_states=initial_states,
+                            csv_logger=csv_logger
+                        )
+
+                    if result["success"]:
+                        skill_success = True
+                        if "final_object_poses" in result:
+                            initial_states.update(result["final_object_poses"])
+                        break
+                    else:
+                        print(f"❌ Recovery failed: {result['reason']}")
+
+            # Track pick skill for potential place recovery
+            if skill_type == "pick":
+                previous_pick_skill_info = skill_info
 
             if skill_success:
                 success_count += 1
                 print(f"\n✅ Skill {skill_idx}/{total_skills} completed successfully")
             else:
-                print(f"\n❌ Skill {skill_idx}/{total_skills} failed after {max_retries} retries")
+                print(f"\n❌ Skill {skill_idx}/{total_skills} failed after {max_retries} attempts")
                 print(f"   Aborting task execution")
                 break
 
@@ -628,6 +910,7 @@ class RealRobotPipeline:
 
         # Step 3: Calculate above pose
         print(f"3️⃣  Calculating above pose...")
+        target_obj_pose = initial_states[target_object]
         object_pose_dict = {"position": target_obj_pose["position"]}
 
         # Load mesh to get object size
@@ -672,7 +955,8 @@ class RealRobotPipeline:
         else:
             print(f"4️⃣  Motion planner not available (skipping)")
             print()
-
+        
+        
         # Step 5: Execute VLA skill (with tracking and success checking)
         print(f"5️⃣  Executing VLA skill: '{language}'...")
         vla_result = self._execute_vla_skill(
@@ -795,7 +1079,23 @@ class RealRobotPipeline:
         actions_from_chunk_completed = 0
         pred_action_chunk = None
 
+        # Relative pose state tracking (for is_relative_pose)
+        is_relative_pose = self.robot_config.get("is_relative_pose", False)
+        is_pick_skill = skill_info.get("skill_type") == "pick"
+        target_object = skill_info.get("target_object")
+        object_pos = None
+        if is_relative_pose and target_object and target_object in self.registration_dict:
+            pose_base = self.registration_dict[target_object]["pose_base"]
+            object_pos = pose_base[:3, 3]  # Extract position from 4x4 matrix
+
+        # Stage tracking for pick skills
+        gripper_history = []
+        stage1_ended = False
+        stage1_end_cart_pos = None
+
         for t_step in range(max_timesteps):
+            print(f"   🔄 Step {t_step} of {max_timesteps}")
+
             # Start timing at the beginning of loop iteration
             start_time_step = time.time()
 
@@ -834,8 +1134,60 @@ class RealRobotPipeline:
                     print(f"   ✅ Success detected at step {t_step}: {success_result['reason']}")
                     return {"success": True, "reason": f"Success at step {t_step}"}
 
+            # Detect distractor objects for random erasing (if enabled)
+            masked_wrist_image = None
+            if self.yoloe_client is not None:
+                distractors = self._get_distractor_objects(skill_info)
+                if distractors:
+                    wrist_image = self._get_camera_data(obs, 'wrist', 'image')
+                    # Convert BGR to RGB for YOLOE
+                    wrist_image_rgb = wrist_image[..., ::-1] if wrist_image is not None else None
+                    if wrist_image_rgb is not None:
+                        distractor_mask = self.yoloe_client.detect_and_union(
+                            wrist_image_rgb,
+                            distractors,
+                            text_prompts=self.yoloe_text_prompts,  # For text mode
+                            conf=0.1
+                        )
+                        # Apply rectangle masking to distractor regions
+                        if distractor_mask is not None and distractor_mask.sum() > 0:
+                            masked_wrist_image = apply_distractor_rectangle_masking(
+                                wrist_image_rgb,
+                                distractor_mask,
+                                max_rectangles=5
+                            )
+                            print(f"   🎭 Applied distractor masking ({distractor_mask.sum()} pixels detected)")
+
+            # Stage detection for pick skills (detect stage 1 end by looking at past gripper values)
+            current_gripper = obs["robot_state"]["gripper_position"]
+            gripper_history.append(current_gripper)
+
+            if is_relative_pose and is_pick_skill and not stage1_ended and len(gripper_history) >= 4:
+                # Check if gripper closed and stable for past 3 steps
+                g = gripper_history
+                gripper_stable_threshold = 1e-4
+                # Gripper closed (current value high) and stable
+                if (g[-1] > 0.5 and  # Gripper closed
+                    abs(g[-1] - g[-2]) < gripper_stable_threshold and
+                    abs(g[-2] - g[-3]) < gripper_stable_threshold and
+                    abs(g[-3] - g[-4]) < gripper_stable_threshold):
+                    stage1_ended = True
+                    # Compute and store the relative pose at this moment
+                    ee_pos = np.array(obs["robot_state"]["cartesian_position"])
+                    if object_pos is not None:
+                        rel_pos = ee_pos[:3] - object_pos
+                        stage1_end_cart_pos = np.concatenate([rel_pos, ee_pos[3:]])
+                        print(f"   📍 Stage 1 ended at step {t_step}, freezing relative pose")
+
             # Prepare observation for VLA
-            vla_obs = self._prepare_vla_observation(obs)
+            vla_obs = self._prepare_vla_observation(
+                obs,
+                object_pos=object_pos,
+                is_pick_skill=is_pick_skill,
+                stage1_ended=stage1_ended,
+                stage1_end_cart_pos=stage1_end_cart_pos,
+                masked_wrist_image=masked_wrist_image
+            )
 
             # Query VLA server for new action chunk
             if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= open_loop_horizon:
@@ -862,9 +1214,9 @@ class RealRobotPipeline:
             # Clip action to safe range
             action = np.clip(action, -1, 1)
 
-            # Log actions
+            # Log actions and state
             if csv_logger is not None:
-                csv_logger.log_action(t_step, action)
+                csv_logger.log_step(t_step, action, obs["robot_state"])
 
             # Execute action
             try:
@@ -881,12 +1233,25 @@ class RealRobotPipeline:
         print(f"   ✅ Completed VLA execution with tracking ({max_timesteps} steps)")
         return {"success": True, "reason": "Completed"}
 
-    def _prepare_vla_observation(self, obs: Dict) -> Dict:
+    def _prepare_vla_observation(
+        self,
+        obs: Dict,
+        object_pos: np.ndarray = None,
+        is_pick_skill: bool = False,
+        stage1_ended: bool = False,
+        stage1_end_cart_pos: np.ndarray = None,
+        masked_wrist_image: np.ndarray = None
+    ) -> Dict:
         """
         Prepare observation for VLA client.
 
         Args:
             obs: Raw observation from robot_env
+            object_pos: Object position for relative pose (None = use absolute)
+            is_pick_skill: Whether current skill is a pick skill
+            stage1_ended: Whether pick stage 1 has ended
+            stage1_end_cart_pos: Frozen relative pose from stage 1 end
+            masked_wrist_image: Pre-masked wrist image (RGB), if provided overrides obs wrist image
 
         Returns:
             Observation dict for VLA
@@ -895,11 +1260,9 @@ class RealRobotPipeline:
         robot_state = obs["robot_state"]
 
         # Extract camera images
-        # Camera IDs from config
         left_camera_id = self.robot_config["cameras"]["left_camera_id"]
         wrist_camera_id = self.robot_config["cameras"]["wrist_camera_id"]
 
-        # Find images by camera ID
         left_image = None
         wrist_image = None
 
@@ -912,12 +1275,414 @@ class RealRobotPipeline:
         if left_image is None or wrist_image is None:
             raise ValueError(f"Could not find camera images in observation")
 
+        # Use masked wrist image if provided
+        if masked_wrist_image is not None:
+            wrist_image = masked_wrist_image
+
+        # Compute cartesian_position (relative or absolute)
+        abs_cart_pos = np.array(robot_state["cartesian_position"])
+        is_relative_pose = self.robot_config.get("is_relative_pose", False)
+
+        if is_relative_pose and object_pos is not None:
+            if is_pick_skill and stage1_ended and stage1_end_cart_pos is not None:
+                # Pick skill stage 2: use frozen relative pose
+                cart_pos = stage1_end_cart_pos
+            else:
+                # Stage 1 or place skill: compute relative position + original orientation
+                rel_pos = abs_cart_pos[:3] - object_pos
+                cart_pos = np.concatenate([rel_pos, abs_cart_pos[3:]])
+        else:
+            # Use absolute position
+            cart_pos = abs_cart_pos
+
         return {
             "left_image": left_image,
             "wrist_image": wrist_image,
-            "cartesian_position": np.array(robot_state["cartesian_position"]),
+            "cartesian_position": cart_pos,
             "gripper_position": np.array([robot_state["gripper_position"]])
         }
+
+    def _retry_pick_skill(
+        self,
+        skill_info: Dict,
+        initial_states: Dict,
+        csv_logger: Optional[CSVLogger]
+    ) -> Dict:
+        """
+        Retry pick skill with fresh object pose.
+
+        Recovery logic:
+        1. Re-obtain object pose (fresh tracking)
+        2. Recalculate above pose
+        3. MP to above pose (gripper open)
+        4. VLA execute pick
+        5. Move EE up (gripper closed)
+        6. Check success
+
+        Args:
+            skill_info: Skill information for pick skill
+            initial_states: Initial object poses (will be updated)
+            csv_logger: CSV logger instance
+
+        Returns:
+            Dict with "success", "reason", "final_object_poses"
+        """
+        target_object = skill_info["target_object"]
+        print(f"\n{'='*60}")
+        print(f"🔄 RETRY PICK: Re-obtaining pose for '{target_object}'")
+        print(f"{'='*60}\n")
+
+        # Load camera intrinsics
+        K_config = self.robot_config["camera_intrinsics"]
+        K = np.array([
+            [K_config["fx"], 0, K_config["cx"]],
+            [0, K_config["fy"], K_config["cy"]],
+            [0, 0, 1]
+        ], dtype=np.float32)
+
+        # Step 1: Re-obtain object pose
+        print(f"1️⃣  Re-obtaining object pose...")
+        obs = self.robot_env.get_observation()
+        pose_result = self.object_pose_client.get_pose(
+            object_name=target_object,
+            rgb=self._get_camera_data(obs, 'left', 'image'),
+            depth=self._get_camera_data(obs, 'left', 'depth'),
+            K=K,
+            iteration=self.robot_config["tracking"]["tracking_iteration"]
+        )
+
+        if pose_result is None or not pose_result["success"]:
+            return {"success": False, "reason": f"Failed to re-obtain pose for {target_object}"}
+
+        pose_cam = np.array(pose_result["pose"])
+        object_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
+        object_position = object_pose_matrix[:3, 3]
+
+        # Update initial_states with fresh pose
+        initial_states[target_object] = {
+            "position": object_position,
+            "pose_matrix": object_pose_matrix
+        }
+        print(f"   ✅ Fresh pose: [{object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f}]")
+
+        # Step 2: Recalculate above pose
+        print(f"\n2️⃣  Recalculating above pose...")
+        object_pose_dict = {"position": object_position}
+        reg_info = self.registration_dict[target_object]
+        mesh = trimesh.load(reg_info["mesh_path"])
+        mesh_vertices = np.array(mesh.vertices)
+
+        above_pose = self.target_pose_calculator.calculate_above_pose(
+            object_pose_dict, target_object, mesh_vertices=mesh_vertices
+        )
+        # Set gripper open for pick approach
+        above_pose["gripper"] = 0.0
+
+        # Step 3: MP to above pose (gripper open)
+        print(f"\n3️⃣  Moving to above pose (gripper open)...")
+        if self.motion_planner is not None:
+            mp_result = self.motion_planner.move_to_pose(above_pose, method="linear")
+            if not mp_result["success"]:
+                return {"success": False, "reason": f"Failed to reach above pose"}
+        print()
+
+        # Step 4: VLA execute pick
+        print(f"4️⃣  Executing VLA pick skill...")
+        vla_result = self._execute_vla_skill(
+            skill_info=skill_info,
+            initial_states=initial_states,
+            K=K,
+            csv_logger=csv_logger
+        )
+
+        if not vla_result["success"]:
+            return {"success": False, "reason": f"VLA pick failed: {vla_result['reason']}"}
+        print()
+
+        # Step 5: Move EE up (gripper closed)
+        print(f"5️⃣  Moving EE up (gripper closed)...")
+        if self.motion_planner is not None:
+            # Get current pose and set gripper closed
+            current_pose = self.motion_planner.get_current_ee_pose()
+            lift_pose = {
+                "position": current_pose["position"] + np.array([0, 0, 0.05]),
+                "orientation_euler": current_pose["orientation_euler"],
+                "gripper": 1.0  # Keep gripper closed after pick
+            }
+            self.motion_planner.move_to_pose(lift_pose, method="linear")
+        print()
+
+        # Step 6: Get final pose and check success
+        print(f"6️⃣  Checking pick success...")
+        obs_final = self.robot_env.get_observation()
+        final_pose_result = self.object_pose_client.get_pose(
+            object_name=target_object,
+            rgb=self._get_camera_data(obs_final, 'left', 'image'),
+            depth=self._get_camera_data(obs_final, 'left', 'depth'),
+            K=K,
+            iteration=self.robot_config["tracking"]["tracking_iteration"]
+        )
+
+        final_object_poses = {}
+        if final_pose_result and final_pose_result["success"]:
+            pose_cam = np.array(final_pose_result["pose"])
+            final_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
+            final_object_poses[target_object] = {
+                "position": final_pose_matrix[:3, 3],
+                "pose_matrix": final_pose_matrix
+            }
+
+        # Check success
+        mesh_paths = {name: info["mesh_path"] for name, info in self.registration_dict.items()}
+        success_result = self.success_checker.check_success(
+            success_check_type=skill_info.get("success_check", "object_lifted"),
+            skill_info=skill_info,
+            initial_states=initial_states,
+            current_states=final_object_poses,
+            mesh_paths=mesh_paths
+        )
+
+        print(f"   {'✅' if success_result['success'] else '❌'} {success_result['reason']}")
+
+        return {
+            "success": success_result["success"],
+            "reason": success_result["reason"],
+            "final_object_poses": final_object_poses
+        }
+
+    def _retry_place_skill(
+        self,
+        place_skill_info: Dict,
+        pick_skill_info: Dict,
+        initial_states: Dict,
+        csv_logger: Optional[CSVLogger]
+    ) -> Dict:
+        """
+        Retry place skill by first re-doing pick, then place.
+
+        Recovery logic:
+        1. Re-do pick skill (re-obtain grasp object, pick it up)
+        2. Re-obtain target object pose for place
+        3. Recalculate above pose for place target
+        4. MP to above pose (gripper closed, holding object)
+        5. VLA execute place
+        6. Move EE up (gripper open)
+        7. Check success
+
+        Args:
+            place_skill_info: Skill information for place skill
+            pick_skill_info: Skill information for previous pick skill
+            initial_states: Initial object poses (will be updated)
+            csv_logger: CSV logger instance
+
+        Returns:
+            Dict with "success", "reason", "final_object_poses"
+        """
+        grasp_object = place_skill_info.get("grasp_object")
+        target_object = place_skill_info["target_object"]
+
+        print(f"\n{'='*60}")
+        print(f"🔄 RETRY PLACE: Re-doing pick for '{grasp_object}', then place on '{target_object}'")
+        print(f"{'='*60}\n")
+
+        # Step 1: Re-do pick skill first
+        print(f"📦 Step 1: Re-doing PICK skill first...")
+        pick_result = self._retry_pick_skill(
+            skill_info=pick_skill_info,
+            initial_states=initial_states,
+            csv_logger=csv_logger
+        )
+
+        if not pick_result["success"]:
+            return {"success": False, "reason": f"Re-pick failed: {pick_result['reason']}"}
+
+        # Update initial_states with pick result
+        if "final_object_poses" in pick_result:
+            initial_states.update(pick_result["final_object_poses"])
+
+        print(f"\n✅ Re-pick successful, now proceeding to PLACE...")
+
+        # Load camera intrinsics
+        K_config = self.robot_config["camera_intrinsics"]
+        K = np.array([
+            [K_config["fx"], 0, K_config["cx"]],
+            [0, K_config["fy"], K_config["cy"]],
+            [0, 0, 1]
+        ], dtype=np.float32)
+
+        # Step 2: Re-obtain target object pose for place
+        print(f"\n2️⃣  Re-obtaining pose for place target '{target_object}'...")
+        obs = self.robot_env.get_observation()
+        pose_result = self.object_pose_client.get_pose(
+            object_name=target_object,
+            rgb=self._get_camera_data(obs, 'left', 'image'),
+            depth=self._get_camera_data(obs, 'left', 'depth'),
+            K=K,
+            iteration=self.robot_config["tracking"]["tracking_iteration"]
+        )
+
+        if pose_result is None or not pose_result["success"]:
+            return {"success": False, "reason": f"Failed to re-obtain pose for {target_object}"}
+
+        pose_cam = np.array(pose_result["pose"])
+        object_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
+        object_position = object_pose_matrix[:3, 3]
+
+        # Update initial_states with fresh pose
+        initial_states[target_object] = {
+            "position": object_position,
+            "pose_matrix": object_pose_matrix
+        }
+        print(f"   ✅ Fresh pose: [{object_position[0]:.3f}, {object_position[1]:.3f}, {object_position[2]:.3f}]")
+
+        # Step 3: Recalculate above pose for place
+        print(f"\n3️⃣  Recalculating above pose for place...")
+        object_pose_dict = {"position": object_position}
+        reg_info = self.registration_dict[target_object]
+        mesh = trimesh.load(reg_info["mesh_path"])
+        mesh_vertices = np.array(mesh.vertices)
+
+        above_pose = self.target_pose_calculator.calculate_above_pose(
+            object_pose_dict, target_object, mesh_vertices=mesh_vertices
+        )
+        # Set gripper closed for place approach (holding object)
+        above_pose["gripper"] = 1.0
+
+        # Step 4: MP to above pose (gripper closed)
+        print(f"\n4️⃣  Moving to above pose (gripper closed, holding object)...")
+        if self.motion_planner is not None:
+            mp_result = self.motion_planner.move_to_pose(above_pose, method="linear")
+            if not mp_result["success"]:
+                return {"success": False, "reason": f"Failed to reach above pose for place"}
+        print()
+
+        # Step 5: VLA execute place
+        print(f"5️⃣  Executing VLA place skill...")
+        vla_result = self._execute_vla_skill(
+            skill_info=place_skill_info,
+            initial_states=initial_states,
+            K=K,
+            csv_logger=csv_logger
+        )
+
+        if not vla_result["success"]:
+            return {"success": False, "reason": f"VLA place failed: {vla_result['reason']}"}
+        print()
+
+        # Step 6: Move EE up (gripper open)
+        print(f"6️⃣  Moving EE up (gripper open)...")
+        if self.motion_planner is not None:
+            current_pose = self.motion_planner.get_current_ee_pose()
+            lift_pose = {
+                "position": current_pose["position"] + np.array([0, 0, 0.05]),
+                "orientation_euler": current_pose["orientation_euler"],
+                "gripper": 0.0  # Open gripper after place
+            }
+            self.motion_planner.move_to_pose(lift_pose, method="linear")
+        print()
+
+        # Step 7: Get final poses and check success
+        print(f"7️⃣  Checking place success...")
+        obs_final = self.robot_env.get_observation()
+        final_object_poses = {}
+
+        # Get final poses for both objects
+        for obj_name in [grasp_object, target_object]:
+            if obj_name is None:
+                continue
+            final_pose_result = self.object_pose_client.get_pose(
+                object_name=obj_name,
+                rgb=self._get_camera_data(obs_final, 'left', 'image'),
+                depth=self._get_camera_data(obs_final, 'left', 'depth'),
+                K=K,
+                iteration=self.robot_config["tracking"]["tracking_iteration"]
+            )
+
+            if final_pose_result and final_pose_result["success"]:
+                pose_cam = np.array(final_pose_result["pose"])
+                final_pose_matrix = self._transform_pose_camera_to_base(pose_cam, camera_role='left')
+                final_object_poses[obj_name] = {
+                    "position": final_pose_matrix[:3, 3],
+                    "pose_matrix": final_pose_matrix
+                }
+
+        # Check success
+        mesh_paths = {name: info["mesh_path"] for name, info in self.registration_dict.items()}
+        success_result = self.success_checker.check_success(
+            success_check_type=place_skill_info.get("success_check", "object_on_target"),
+            skill_info=place_skill_info,
+            initial_states=initial_states,
+            current_states=final_object_poses,
+            mesh_paths=mesh_paths
+        )
+
+        print(f"   {'✅' if success_result['success'] else '❌'} {success_result['reason']}")
+
+        return {
+            "success": success_result["success"],
+            "reason": success_result["reason"],
+            "final_object_poses": final_object_poses
+        }
+
+
+def apply_distractor_rectangle_masking(
+    image: np.ndarray,
+    distractor_mask: np.ndarray,
+    max_rectangles: int = 5
+) -> np.ndarray:
+    """
+    Apply rectangle masking to distractor regions in image.
+
+    Finds connected components in distractor_mask, sorts by area (largest first),
+    and masks up to max_rectangles components with their bounding boxes.
+
+    Args:
+        image: Input image (H, W, 3) uint8
+        distractor_mask: Binary mask of distractor regions (H, W) uint8
+        max_rectangles: Maximum number of rectangles to mask (default 5)
+
+    Returns:
+        Masked image with rectangular black regions over distractors
+    """
+    if distractor_mask is None or distractor_mask.sum() == 0:
+        return image
+
+    # Find connected components
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        distractor_mask, connectivity=8
+    )
+
+    if num_labels <= 1:  # Only background
+        return image
+
+    # Get component areas (skip background label 0)
+    # stats columns: [x, y, width, height, area]
+    component_info = []
+    for label_id in range(1, num_labels):
+        area = stats[label_id, cv2.CC_STAT_AREA]
+        x = stats[label_id, cv2.CC_STAT_LEFT]
+        y = stats[label_id, cv2.CC_STAT_TOP]
+        w = stats[label_id, cv2.CC_STAT_WIDTH]
+        h = stats[label_id, cv2.CC_STAT_HEIGHT]
+        component_info.append({
+            'label': label_id,
+            'area': area,
+            'bbox': (x, y, x + w, y + h)
+        })
+
+    # Sort by area (largest first)
+    component_info.sort(key=lambda c: c['area'], reverse=True)
+
+    # Take top N components
+    selected = component_info[:max_rectangles]
+
+    # Apply rectangle masking
+    masked_image = image.copy()
+    for comp in selected:
+        x1, y1, x2, y2 = comp['bbox']
+        masked_image[y1:y2, x1:x2] = 0
+
+    return masked_image
 
 
 def main():
