@@ -27,16 +27,16 @@ class VLAClient:
     receives predicted action chunks.
     """
 
-    def __init__(self, server_host: str, server_port: int):
+    def __init__(self, host: str, port: int):
         """
         Initialize VLA client and connect to server.
 
         Args:
-            server_host: VLA server hostname/IP (e.g., "localhost", "192.168.1.100")
-            server_port: VLA server port (default 8008 for OpenVLA-OFT)
+            host: VLA server hostname/IP (e.g., "localhost", "192.168.1.100")
+            port: VLA server port (default 8008 for OpenVLA-OFT)
         """
-        self.server_host = server_host
-        self.server_port = server_port
+        self.server_host = host
+        self.server_port = port
 
         if websocket_client_policy is None:
             warnings.warn("openpi_client not available. VLAClient will not work.")
