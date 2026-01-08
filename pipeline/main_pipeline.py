@@ -124,7 +124,7 @@ class RealRobotPipeline:
         # ========== [2.1.3] Create output directory ==========
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         task_dir_name = task_name.replace(" ", "_")
-        self.run_dir = Path(self.robot_config["logging"]["output_dir"]) / f"{task_dir_name}_{timestamp}"
+        self.run_dir = Path(self.robot_config["logging"]["save_dir"]) / f"{task_dir_name}_{timestamp}"
         self.run_dir.mkdir(parents=True, exist_ok=True)
         print(f"📂 Output directory: {self.run_dir}\n")
 
@@ -164,11 +164,11 @@ class RealRobotPipeline:
 
         # ========== [2.1.6.2] FoundationPose client ==========
         print("2️⃣  Connecting to FoundationPose server...")
-        fp_config = self.robot_config["foundation_pose_server"]
+        fp_config = self.robot_config["foundationpose_server"]
         self.object_pose_client = ObjectPoseClient(
             server_url=fp_config["host"],
             port=fp_config["port"],
-            timeout=fp_config["timeout"]
+            timeout=fp_config.get("timeout", 60000)
         )
         print()
 
