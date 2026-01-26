@@ -107,8 +107,9 @@ class VLAClient:
             raise RuntimeError("VLA client not connected. Cannot predict actions.")
 
         # Prepare request data based on model type
-        # Both models use the same image inputs (exterior + wrist), only proprio differs
-        exterior_image = observations["left_image"]
+        # Both models are wrist-only: send zeros for exterior image, use wrist image
+        # Only proprioceptive input differs: joint_position (pi05) vs cartesian_position (openvla-oft)
+        exterior_image = np.zeros((224, 224, 3), dtype=np.uint8)
 
         if self.model_type == "pi05":
             proprio_value = observations["joint_position"]
