@@ -112,12 +112,24 @@
   "success_checking": {
     "object_lifted": {
       "min_height_increase": 0.03,
-      "stable_timeout": 2.0
+      "_comment": "For pick skills: object Z increases by >= 3cm"
     },
     "object_on_target": {
       "xy_distance_threshold": 0.05,
       "z_buffer_distance": 0.02,
-      "stable_timeout": 2.0
+      "_comment": "For place-on skills: XY < 5cm, Z < mesh_half_edge + 2cm"
+    },
+    "object_in_target": {
+      "xy_distance_threshold": 0.05,
+      "z_distance_threshold": 0.05,
+      "_comment": "For place-in skills: XY < 5cm, Z < 5cm (fixed threshold)"
+    },
+    "object_hang": {
+      "min_height_increase": 0.02,
+      "xy_distance_threshold": 0.05,
+      "stability_threshold": 0.02,
+      "stability_window": 10,
+      "_comment": "For hang skills: lifted >= 2cm, XY < 5cm, stable (< 2cm change) for 10 steps"
     }
   },
 
