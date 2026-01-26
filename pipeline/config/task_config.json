@@ -5,28 +5,99 @@
   "long_horizon_tasks": [
     {
       "task_id": 1,
-      "name": "pick the red cup",
-      "skills": [
-        "pick red cup"
-      ],
-      "scene_objects": ["red_cup"]
-    },
-    {
-      "task_id": 2,
-      "name": "pick the red cup and place on plate",
-      "skills": [
-        "pick red cup",
-        "place red cup on plate"
-      ],
+      "name": "pick red cup and place on plate",
+      "skills": ["pick red cup", "place red cup on plate"],
       "scene_objects": ["red_cup", "plate"]
     },
     {
+      "task_id": 2,
+      "name": "pick red cup and place in basket",
+      "skills": ["pick red cup", "place red cup in basket"],
+      "scene_objects": ["red_cup", "basket"]
+    },
+    {
       "task_id": 3,
-      "name": "pick the parmesan cheese",
-      "skills": [
-        "pick parmesan cheese"
-      ],
-      "scene_objects": ["parmesan_cheese"]
+      "name": "pick parmesan cheese and place in basket",
+      "skills": ["pick parmesan cheese", "place parmesan cheese in basket"],
+      "scene_objects": ["parmesan_cheese", "basket"]
+    },
+    {
+      "task_id": 4,
+      "name": "pick yellow mustard and place in basket",
+      "skills": ["pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 5,
+      "name": "pick white cup and stack on red cup",
+      "skills": ["pick white cup", "stack white cup on red cup"],
+      "scene_objects": ["white_cup", "red_cup"]
+    },
+    {
+      "task_id": 6,
+      "name": "pick tape and hang on holder tree",
+      "skills": ["pick tape", "hang tape on holder tree"],
+      "scene_objects": ["tape", "holder_tree"]
+    },
+    {
+      "task_id": 7,
+      "name": "pick red cup place on plate then stack white cup",
+      "skills": ["pick red cup", "place red cup on plate", "pick white cup", "stack white cup on red cup"],
+      "scene_objects": ["red_cup", "plate", "white_cup"]
+    },
+    {
+      "task_id": 8,
+      "name": "pick parmesan cheese and yellow mustard place in basket",
+      "skills": ["pick parmesan cheese", "place parmesan cheese in basket", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["parmesan_cheese", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 9,
+      "name": "pick tape hang then pick parmesan cheese place in basket",
+      "skills": ["pick tape", "hang tape on holder tree", "pick parmesan cheese", "place parmesan cheese in basket"],
+      "scene_objects": ["tape", "holder_tree", "parmesan_cheese", "basket"]
+    },
+    {
+      "task_id": 10,
+      "name": "pick red cup place in basket then pick yellow mustard place in basket",
+      "skills": ["pick red cup", "place red cup in basket", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["red_cup", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 11,
+      "name": "pick tape hang then pick yellow mustard place in basket",
+      "skills": ["pick tape", "hang tape on holder tree", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["tape", "holder_tree", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 12,
+      "name": "pick red cup place on plate stack white cup then hang tape",
+      "skills": ["pick red cup", "place red cup on plate", "pick white cup", "stack white cup on red cup", "pick tape", "hang tape on holder tree"],
+      "scene_objects": ["red_cup", "plate", "white_cup", "tape", "holder_tree"]
+    },
+    {
+      "task_id": 13,
+      "name": "pick parmesan cheese yellow mustard red cup all place in basket",
+      "skills": ["pick parmesan cheese", "place parmesan cheese in basket", "pick yellow mustard", "place yellow mustard in basket", "pick red cup", "place red cup in basket"],
+      "scene_objects": ["parmesan_cheese", "yellow_mustard", "red_cup", "basket"]
+    },
+    {
+      "task_id": 14,
+      "name": "pick red cup place on plate then pick parmesan cheese and yellow mustard place in basket",
+      "skills": ["pick red cup", "place red cup on plate", "pick parmesan cheese", "place parmesan cheese in basket", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["red_cup", "plate", "parmesan_cheese", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 15,
+      "name": "hang tape then pick parmesan cheese and yellow mustard place in basket",
+      "skills": ["pick tape", "hang tape on holder tree", "pick parmesan cheese", "place parmesan cheese in basket", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["tape", "holder_tree", "parmesan_cheese", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 16,
+      "name": "full kitchen cleanup task",
+      "skills": ["pick red cup", "place red cup on plate", "pick white cup", "stack white cup on red cup", "pick parmesan cheese", "place parmesan cheese in basket", "pick tape", "hang tape on holder tree"],
+      "scene_objects": ["red_cup", "plate", "white_cup", "parmesan_cheese", "basket", "tape", "holder_tree"]
     }
   ],
 
@@ -37,6 +108,30 @@
       "skill_type": "pick",
       "success_check": "object_lifted"
     },
+    "pick white cup": {
+      "target_object": "white_cup",
+      "language": "pick the white cup.",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
+    },
+    "pick parmesan cheese": {
+      "target_object": "parmesan_cheese",
+      "language": "pick the parmesan cheese.",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
+    },
+    "pick yellow mustard": {
+      "target_object": "yellow_mustard",
+      "language": "pick the yellow mustard.",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
+    },
+    "pick tape": {
+      "target_object": "tape",
+      "language": "pick the tape.",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
+    },
     "place red cup on plate": {
       "target_object": "plate",
       "grasp_object": "red_cup",
@@ -44,11 +139,40 @@
       "skill_type": "place",
       "success_check": "object_on_target"
     },
-    "pick parmesan cheese": {
-      "target_object": "parmesan_cheese",
-      "language": "pick the parmesan cheese.",
-      "skill_type": "pick",
-      "success_check": "object_lifted"
+    "place red cup in basket": {
+      "target_object": "basket",
+      "grasp_object": "red_cup",
+      "language": "place the red cup into the basket.",
+      "skill_type": "place",
+      "success_check": "object_in_target"
+    },
+    "place parmesan cheese in basket": {
+      "target_object": "basket",
+      "grasp_object": "parmesan_cheese",
+      "language": "place the parmesan cheese into the basket.",
+      "skill_type": "place",
+      "success_check": "object_in_target"
+    },
+    "place yellow mustard in basket": {
+      "target_object": "basket",
+      "grasp_object": "yellow_mustard",
+      "language": "place the yellow mustard into the basket.",
+      "skill_type": "place",
+      "success_check": "object_in_target"
+    },
+    "stack white cup on red cup": {
+      "target_object": "red_cup",
+      "grasp_object": "white_cup",
+      "language": "stack the white cup on the red cup.",
+      "skill_type": "place",
+      "success_check": "object_on_target"
+    },
+    "hang tape on holder tree": {
+      "target_object": "holder_tree",
+      "grasp_object": "tape",
+      "language": "hang the tape on the holder tree.",
+      "skill_type": "hang",
+      "success_check": "object_hang"
     }
   },
 
@@ -63,7 +187,7 @@
       "target_surface": "Surface name for place skills (e.g., 'plate', 'table')",
       "language": "VLA language instruction",
       "skill_type": "Skill category: 'pick', 'place', 'open', 'close', 'turn_on', 'turn_off'",
-      "success_check": "Success verification method: 'object_lifted', 'object_on_target'"
+      "success_check": "Success verification method: 'object_lifted', 'object_on_target', 'object_in_target', 'object_hang'"
     }
   }
 }
