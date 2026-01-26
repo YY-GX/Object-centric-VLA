@@ -33,10 +33,119 @@ import h5py
 import cv2
 import zmq
 import pickle
+import shutil
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 from datetime import datetime
+from typing import Optional, Tuple
+
+
+# Debug mode test trajectory
+DEBUG_TRAJECTORY = "/home/yygx/PANDA/droid/data/success/2026-01-24/debug/Sat_Jan_24_20:03:05_2026"
+
+
+def apply_random_erasing_augmentation(
+    mask: np.ndarray,
+    erasing_area_ratio: int,
+    num_rectangles: int,
+    random_state: Optional[np.random.RandomState] = None
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Apply random rectangular erasing to background region of segmentation mask.
+
+    Generates random rectangles that erase (zero out) parts of the background,
+    leaving target object untouched. Handles rectangle overlaps correctly by
+    counting union area only once.
+
+    Args:
+        mask: Grayscale segmentation mask (H, W), uint8
+              - 255 = target object (never erased)
+              - 0-254 = background (eligible for erasing)
+        erasing_area_ratio: Target percentage of background to erase (20-80)
+                           Example: 30 = erase 30% of background pixels
+        num_rectangles: Number of random rectangles to generate (1-5)
+        random_state: numpy RandomState for reproducibility
+
+    Returns:
+        Tuple of (erased_mask, erased_pixels):
+        - erased_mask: Segmentation mask with rectangles zeroed out in background
+        - erased_pixels: Boolean mask indicating which pixels were erased (for RGB masking)
+    """
+    if random_state is None:
+        random_state = np.random.RandomState()
+
+    # Create working copy
+    erased_mask = mask.copy()
+    h, w = mask.shape
+
+    # Identify background region (pixels < 255)
+    background_mask = (mask < 255)
+    background_area = background_mask.sum()
+
+    if background_area == 0:
+        return erased_mask, np.zeros_like(mask, dtype=bool)  # No background to erase
+
+    # Calculate target area to erase
+    target_erase_area = int(background_area * (erasing_area_ratio / 100.0))
+
+    # Track erased pixels (union of all rectangles)
+    erased_pixels = np.zeros_like(mask, dtype=bool)
+    current_erased_area = 0
+
+    # Generate rectangles iteratively until target area reached
+    max_attempts = num_rectangles * 10  # Prevent infinite loop
+    rectangles_placed = 0
+    attempts = 0
+
+    while rectangles_placed < num_rectangles and attempts < max_attempts:
+        attempts += 1
+
+        # Random rectangle size (10-40% of image dimension)
+        rect_h = random_state.randint(int(h * 0.1), int(h * 0.4))
+        rect_w = random_state.randint(int(w * 0.1), int(w * 0.4))
+
+        # Random position
+        y1 = random_state.randint(0, h - rect_h)
+        x1 = random_state.randint(0, w - rect_w)
+        y2 = y1 + rect_h
+        x2 = x1 + rect_w
+
+        # Check if rectangle overlaps with target object (mask == 255)
+        rect_region = mask[y1:y2, x1:x2]
+        has_target = (rect_region == 255).any()
+
+        if has_target:
+            continue  # Skip rectangles that touch target object
+
+        # Check if rectangle is in background region
+        rect_background = background_mask[y1:y2, x1:x2]
+        background_pixels_in_rect = rect_background.sum()
+
+        if background_pixels_in_rect == 0:
+            continue  # Rectangle not in background
+
+        # Mark this rectangle as erased
+        temp_erased = erased_pixels.copy()
+        temp_erased[y1:y2, x1:x2] = True
+
+        # Calculate new union area (overlaps counted once)
+        new_erased_area = (temp_erased & background_mask).sum()
+
+        # Accept rectangle if it contributes to erasing
+        if new_erased_area > current_erased_area:
+            erased_pixels = temp_erased
+            current_erased_area = new_erased_area
+            rectangles_placed += 1
+
+            # Stop if target area reached
+            if current_erased_area >= target_erase_area:
+                break
+
+    # Apply erasing: zero out erased pixels in background
+    erased_mask[erased_pixels] = 0
+
+    return erased_mask, erased_pixels
 
 
 class YOLOEVisualClient:
@@ -206,6 +315,134 @@ def union_masks(masks: list, shape: tuple, fallback_full: bool = True) -> np.nda
     return result
 
 
+def create_augmented_trajectory(
+    trajectory_dir: Path,
+    masks_array: np.ndarray,
+    wrist_camera: str,
+    erasing_ratios: list,
+    num_rectangles_choices: list,
+    overwrite: bool = False
+) -> Optional[Path]:
+    """
+    Create a duplicate trajectory with random erasing applied to wrist images.
+
+    Args:
+        trajectory_dir: Original trajectory directory
+        masks_array: Segmentation masks (T, H, W), uint8. Value > 0 = object of interest
+        wrist_camera: Wrist camera ID for MP4 path
+        erasing_ratios: List of area ratios to randomly sample from
+        num_rectangles_choices: List of rectangle counts to randomly sample from
+        overwrite: Whether to overwrite existing augmented trajectory
+
+    Returns:
+        Path to the created augmented trajectory directory, or None if failed
+    """
+    # 1. Create augmented directory (sibling with _random_erased suffix)
+    augmented_dir = trajectory_dir.parent / f"{trajectory_dir.name}_random_erased"
+
+    if augmented_dir.exists():
+        if overwrite:
+            print(f"  Removing existing augmented dir: {augmented_dir}")
+            shutil.rmtree(augmented_dir)
+        else:
+            print(f"  Augmented trajectory already exists: {augmented_dir}")
+            return None
+
+    # 2. Copy entire trajectory folder
+    print(f"  Copying trajectory to: {augmented_dir}")
+    shutil.copytree(trajectory_dir, augmented_dir)
+
+    # 3. Load wrist camera frames from MP4
+    mp4_path = augmented_dir / "recordings" / "MP4" / f"{wrist_camera}.mp4"
+    if not mp4_path.exists():
+        print(f"  Error: MP4 not found: {mp4_path}")
+        shutil.rmtree(augmented_dir)
+        return None
+
+    cap = cv2.VideoCapture(str(mp4_path))
+    if not cap.isOpened():
+        print(f"  Error: Failed to open video: {mp4_path}")
+        shutil.rmtree(augmented_dir)
+        return None
+
+    fps = int(cap.get(cv2.CAP_PROP_FPS)) or 15
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # 4. Read all frames, apply erasing (sample params per frame), write to temp file
+    temp_mp4_path = mp4_path.parent / f"{wrist_camera}_temp.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter(str(temp_mp4_path), fourcc, fps, (width, height))
+
+    frame_idx = 0
+    erased_frame_count = 0
+    params_used = []  # Track params for logging
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Map video frame to mask index
+        if len(masks_array) > 0:
+            mask_idx = min(int(frame_idx * len(masks_array) / total_frames), len(masks_array) - 1)
+            mask = masks_array[mask_idx]
+
+            # Convert mask to 255 scale (mask > 0 → 255 = object)
+            mask_255 = (mask > 0).astype(np.uint8) * 255
+
+            # Sample random params PER FRAME (seeded for reproducibility)
+            frame_rng = np.random.RandomState(seed=hash(trajectory_dir.name) % 2**32 + frame_idx)
+            erasing_ratio = int(frame_rng.choice(erasing_ratios))
+            num_rectangles = int(frame_rng.choice(num_rectangles_choices))
+
+            # Apply random erasing
+            _, erased_pixels = apply_random_erasing_augmentation(
+                mask_255,
+                erasing_area_ratio=erasing_ratio,
+                num_rectangles=num_rectangles,
+                random_state=frame_rng
+            )
+
+            # Apply erasing to frame: black out erased regions
+            if erased_pixels.any():
+                frame[erased_pixels] = 0
+                erased_frame_count += 1
+                params_used.append((erasing_ratio, num_rectangles))
+
+        writer.write(frame)
+        frame_idx += 1
+
+    # Log params distribution
+    if params_used:
+        ratios_used = [p[0] for p in params_used]
+        rects_used = [p[1] for p in params_used]
+        print(f"  Erasing ratios used: min={min(ratios_used)}, max={max(ratios_used)}, unique={sorted(set(ratios_used))}")
+        print(f"  Num rectangles used: min={min(rects_used)}, max={max(rects_used)}, unique={sorted(set(rects_used))}")
+
+    cap.release()
+    writer.release()
+
+    # 6. Replace original MP4 with modified one
+    mp4_path.unlink()
+    temp_mp4_path.rename(mp4_path)
+
+    print(f"  Modified {erased_frame_count}/{frame_idx} frames with random erasing")
+
+    # 7. Update H5 file with attributes
+    h5_path = augmented_dir / "trajectory.h5"
+    with h5py.File(h5_path, 'a') as f:
+        f.attrs['random_erasing_applied'] = True
+        f.attrs['random_erasing_params'] = json.dumps({
+            'erasing_ratios': erasing_ratios,
+            'num_rectangles_choices': num_rectangles_choices,
+            'sampling': 'per_frame'
+        })
+
+    return augmented_dir
+
+
 def process_trajectory(
     trajectory_dir: Path,
     client: YOLOEVisualClient,
@@ -364,6 +601,9 @@ def process_trajectory(
         f[dataset_name].attrs['conf_threshold'] = conf
         f[dataset_name].attrs['created_at'] = datetime.now().isoformat()
 
+        # Mark original trajectory as NOT having random erasing
+        f.attrs['random_erasing_applied'] = False
+
     print(f"  Saved masks: {masks_array.shape}")
     print(f"  Detection counts: {detection_counts}")
 
@@ -371,7 +611,8 @@ def process_trajectory(
         'success': True,
         'num_frames': len(masks_all),
         'mask_shape': masks_array.shape,
-        'detection_counts': detection_counts
+        'detection_counts': detection_counts,
+        'masks_array': masks_array  # Return for augmentation
     }
 
 
@@ -407,10 +648,28 @@ def main():
                         help='Skip registration (assume objects already registered)')
     parser.add_argument('--no_fallback_full', action='store_true',
                         help='Use empty mask (zeros) when no detection, instead of full mask (ones)')
-    parser.add_argument('--save_debug_videos', type=str, default='/home/yygx/PANDA/pipeline/data/debug_mask_videos',
-                        help='Save one overlay video per task folder to this directory for debugging')
+    parser.add_argument('--save_debug_videos', type=str, default=None,
+                        help='Save one overlay video per task folder to this directory for debugging (default: disabled)')
+
+    # Random erasing augmentation arguments
+    parser.add_argument('--create_augmented', action='store_true',
+                        help='Create duplicate trajectories with random erasing applied')
+    parser.add_argument('--augment_only', action='store_true',
+                        help='Only create augmented duplicates using existing masks (skips YOLOE, fast)')
+    parser.add_argument('--erasing_ratios', nargs='+', type=int, default=[20, 30, 40, 60, 80],
+                        help='Area ratios to randomly sample from (default: 20 30 40 60 80)')
+    parser.add_argument('--num_rectangles_choices', nargs='+', type=int, default=[1, 2, 3],
+                        help='Number of rectangles to randomly sample from (default: 1 2 3 4 5)')
+    parser.add_argument('--debug', action='store_true',
+                        help=f'Debug mode: use test trajectory at {DEBUG_TRAJECTORY}')
 
     args = parser.parse_args()
+
+    # Debug mode overrides trajectory_dir
+    if args.debug:
+        print(f"DEBUG MODE: Using test trajectory {DEBUG_TRAJECTORY}")
+        args.trajectory_dir = DEBUG_TRAJECTORY
+        args.data_dir = None
 
     if not args.trajectory_dir and not args.data_dir:
         print("Error: Must specify --trajectory_dir or --data_dir")
@@ -423,6 +682,76 @@ def main():
     ref_dir = Path(args.ref_dir) if args.ref_dir else \
               script_dir.parent / "data" / "yoloe_ref_images"
 
+    # Get trajectory directories to process
+    if args.trajectory_dir:
+        trajectory_dirs = [Path(args.trajectory_dir)]
+    else:
+        trajectory_dirs = find_trajectory_dirs(Path(args.data_dir))
+        print(f"Found {len(trajectory_dirs)} trajectory directories")
+
+    # Filter out _random_erased directories
+    trajectory_dirs = [d for d in trajectory_dirs if '_random_erased' not in d.name]
+
+    # === AUGMENT ONLY MODE ===
+    if args.augment_only:
+        print(f"\n{'='*60}")
+        print("AUGMENT ONLY MODE - Using existing masks")
+        print(f"{'='*60}")
+
+        stats = {'augmented': 0, 'skipped_no_mask': 0, 'skipped_exists': 0}
+        augmented_dirs = []
+
+        for traj_dir in trajectory_dirs:
+            h5_path = traj_dir / "trajectory.h5"
+            augmented_dir = traj_dir.parent / f"{traj_dir.name}_random_erased"
+
+            # Skip if augmented already exists
+            if augmented_dir.exists():
+                print(f"  [SKIP] {traj_dir.name}: _random_erased already exists")
+                stats['skipped_exists'] += 1
+                continue
+
+            # Check if masks exist
+            if not h5_path.exists():
+                print(f"  [SKIP] {traj_dir.name}: no H5 file")
+                stats['skipped_no_mask'] += 1
+                continue
+
+            with h5py.File(h5_path, 'r') as f:
+                if 'observation/mask_objects_of_interest' not in f:
+                    print(f"  [SKIP] {traj_dir.name}: no masks in H5")
+                    stats['skipped_no_mask'] += 1
+                    continue
+                masks_array = f['observation/mask_objects_of_interest'][:]
+
+            # Create augmented trajectory
+            print(f"  Creating augmented: {traj_dir.name}")
+            aug_dir = create_augmented_trajectory(
+                traj_dir,
+                masks_array,
+                args.wrist_camera,
+                args.erasing_ratios,
+                args.num_rectangles_choices,
+                overwrite=args.overwrite
+            )
+            if aug_dir:
+                augmented_dirs.append(aug_dir)
+                stats['augmented'] += 1
+
+        print(f"\n{'='*60}")
+        print("Summary (Augment Only)")
+        print(f"{'='*60}")
+        print(f"  Augmented: {stats['augmented']}")
+        print(f"  Skipped (already exists): {stats['skipped_exists']}")
+        print(f"  Skipped (no masks): {stats['skipped_no_mask']}")
+
+        if augmented_dirs:
+            print(f"\n  Created {len(augmented_dirs)} augmented trajectories")
+
+        print("\nDone!")
+        return
+
+    # === NORMAL MODE - Need YOLOE server ===
     # Load config
     config = load_task_config(config_path)
     print(f"Loaded config from: {config_path}")
@@ -437,13 +766,6 @@ def main():
         print("  conda activate yoloe")
         print("  python tests_yy/scripts/yoloe_visual_server.py --port 5559")
         return
-
-    # Get trajectory directories to process
-    if args.trajectory_dir:
-        trajectory_dirs = [Path(args.trajectory_dir)]
-    else:
-        trajectory_dirs = find_trajectory_dirs(Path(args.data_dir))
-        print(f"Found {len(trajectory_dirs)} trajectory directories")
 
     # Collect all unique objects needed
     if args.objects:
@@ -489,12 +811,13 @@ def main():
     print("Processing Trajectories")
     print(f"{'='*60}")
 
-    stats = {'processed': 0, 'skipped': 0, 'errors': 0}
+    stats = {'processed': 0, 'skipped': 0, 'errors': 0, 'augmented': 0}
 
     # Track which tasks have had debug videos saved (one per task folder)
     tasks_with_debug_video = set()
     debug_video_dir = Path(args.save_debug_videos) if args.save_debug_videos else None
     debug_videos_saved = []
+    augmented_dirs = []
 
     for traj_dir in trajectory_dirs:
         # Determine objects for this trajectory
@@ -541,6 +864,22 @@ def main():
             stats['processed'] += 1
             if save_debug_video_path:
                 debug_videos_saved.append(save_debug_video_path)
+
+            # Create augmented trajectory if requested
+            if args.create_augmented and 'masks_array' in result:
+                print(f"\n  Creating augmented trajectory with random erasing...")
+                augmented_dir = create_augmented_trajectory(
+                    traj_dir,
+                    result['masks_array'],
+                    args.wrist_camera,
+                    args.erasing_ratios,
+                    args.num_rectangles_choices,
+                    overwrite=args.overwrite
+                )
+                if augmented_dir:
+                    augmented_dirs.append(augmented_dir)
+                    stats['augmented'] += 1
+
         elif result.get('skipped'):
             print(f"  Skipped: {result.get('reason')}")
             stats['skipped'] += 1
@@ -560,8 +899,15 @@ def main():
     print("Summary")
     print(f"{'='*60}")
     print(f"  Processed: {stats['processed']}")
+    print(f"  Augmented: {stats['augmented']}")
     print(f"  Skipped: {stats['skipped']}")
     print(f"  Errors: {stats['errors']}")
+
+    # Print augmented trajectories info
+    if augmented_dirs:
+        print(f"\n  Augmented trajectories created ({len(augmented_dirs)}):")
+        for aug_dir in augmented_dirs:
+            print(f"    - {aug_dir}")
 
     # Print debug videos info
     if debug_videos_saved:

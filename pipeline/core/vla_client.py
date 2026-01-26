@@ -43,11 +43,11 @@ class VLAClient:
             self.policy_client = None
             return
 
-        print(f"🌐 Connecting to VLA server at {server_host}:{server_port}...")
+        print(f"🌐 Connecting to VLA server at {self.server_host}:{self.server_port}...")
 
         try:
             self.policy_client = websocket_client_policy.WebsocketClientPolicy(
-                server_host, server_port
+                self.server_host, self.server_port
             )
             print(f"✅ Connected to VLA server")
         except Exception as e:

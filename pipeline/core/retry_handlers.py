@@ -68,9 +68,11 @@ def retry_pick_skill(
     # Step 1: Re-obtain object pose
     print(f"1️⃣  Re-obtaining object pose...")
     obs = robot_env.get_observation()
+    # Camera returns BGRA, convert to RGB for FoundationPose
+    bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
     pose_result = pose_client.get_pose(
         object_name=target_object,
-        rgb=get_camera_data(obs, 'left', robot_config, 'image'),
+        rgb=bgra_image[..., :3][..., ::-1],  # Strip alpha, then BGR to RGB
         depth=get_camera_data(obs, 'left', robot_config, 'depth'),
         K=K,
         iteration=robot_config["tracking"]["tracking_iteration"]
@@ -140,9 +142,11 @@ def retry_pick_skill(
     # Step 6: Get final pose and check success
     print(f"6️⃣  Checking pick success...")
     obs_final = robot_env.get_observation()
+    # Camera returns BGRA, convert to RGB for FoundationPose
+    bgra_image_final = get_camera_data(obs_final, 'left', robot_config, 'image')
     final_pose_result = pose_client.get_pose(
         object_name=target_object,
-        rgb=get_camera_data(obs_final, 'left', robot_config, 'image'),
+        rgb=bgra_image_final[..., :3][..., ::-1],  # Strip alpha, then BGR to RGB
         depth=get_camera_data(obs_final, 'left', robot_config, 'depth'),
         K=K,
         iteration=robot_config["tracking"]["tracking_iteration"]
@@ -262,9 +266,11 @@ def retry_place_skill(
     # Step 2: Re-obtain target object pose for place
     print(f"\n2️⃣  Re-obtaining pose for place target '{target_object}'...")
     obs = robot_env.get_observation()
+    # Camera returns BGRA, convert to RGB for FoundationPose
+    bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
     pose_result = pose_client.get_pose(
         object_name=target_object,
-        rgb=get_camera_data(obs, 'left', robot_config, 'image'),
+        rgb=bgra_image[..., :3][..., ::-1],  # Strip alpha, then BGR to RGB
         depth=get_camera_data(obs, 'left', robot_config, 'depth'),
         K=K,
         iteration=robot_config["tracking"]["tracking_iteration"]
@@ -335,13 +341,17 @@ def retry_place_skill(
     obs_final = robot_env.get_observation()
     final_object_poses = {}
 
+    # Camera returns BGRA, convert to RGB for FoundationPose
+    bgra_image_final = get_camera_data(obs_final, 'left', robot_config, 'image')
+    rgb_image_final = bgra_image_final[..., :3][..., ::-1]  # Strip alpha, then BGR to RGB
+
     # Get final poses for both objects
     for obj_name in [grasp_object, target_object]:
         if obj_name is None:
             continue
         final_pose_result = pose_client.get_pose(
             object_name=obj_name,
-            rgb=get_camera_data(obs_final, 'left', robot_config, 'image'),
+            rgb=rgb_image_final,
             depth=get_camera_data(obs_final, 'left', robot_config, 'depth'),
             K=K,
             iteration=robot_config["tracking"]["tracking_iteration"]

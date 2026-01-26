@@ -18,35 +18,35 @@
         "pick red cup",
         "place red cup on plate"
       ],
-      "scene_objects": ["red_cup", "plate", "parmesan_cheese"]
+      "scene_objects": ["red_cup", "plate"]
     },
     {
       "task_id": 3,
-      "name": "pick the plate",
+      "name": "pick the parmesan cheese",
       "skills": [
-        "pick plate"
+        "pick parmesan cheese"
       ],
-      "scene_objects": ["plate"]
+      "scene_objects": ["parmesan_cheese"]
     }
   ],
 
   "skill_mappings": {
     "pick red cup": {
       "target_object": "red_cup",
-      "language": "pick red cup",
+      "language": "pick the red cup.",
       "skill_type": "pick",
       "success_check": "object_lifted"
     },
     "place red cup on plate": {
       "target_object": "plate",
       "grasp_object": "red_cup",
-      "language": "place red cup on plate",
+      "language": "place the red cup on the plate.",
       "skill_type": "place",
       "success_check": "object_on_target"
     },
-    "pick plate": {
-      "target_object": "plate",
-      "language": "pick the plate",
+    "pick parmesan cheese": {
+      "target_object": "parmesan_cheese",
+      "language": "pick the parmesan cheese.",
       "skill_type": "pick",
       "success_check": "object_lifted"
     }

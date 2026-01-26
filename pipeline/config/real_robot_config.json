@@ -3,7 +3,7 @@
 
   "is_randome_erasing": true,
   "is_relative_pose": true,
-  "is_visual_ref_yoloe": false,
+  "is_visual_ref_yoloe": true,
 
   "yoloe_visual_server": {
     "host": "localhost",
@@ -11,7 +11,7 @@
     "_comment": "YOLOE visual prompt server for visual reference mode"
   },
 
-  "yoloe_visual_ref_dir": "pipeline/data/yoloe_ref_images/yoloe_ref_images_3rd_view",
+  "yoloe_visual_ref_dir": "data/yoloe_ref_images/yoloe_ref_images_3rd_view",
 
   "cameras": {
     "left_camera_id": "36087771",
@@ -48,6 +48,9 @@
     "parmesan_cheese": "/home/yygx/PANDA/pipeline/data/meshes/parmesan_cheese/mesh.obj",
     "peaches_can": "/home/yygx/PANDA/pipeline/data/meshes/peaches_can/mesh.obj",
     "yellow_mustard": "/home/yygx/PANDA/pipeline/data/meshes/yellow_mustard/mesh.obj",
+    "cocoa": "/home/yygx/PANDA/pipeline/data/meshes/cocoa/mesh.obj",
+    "rubik_cube": "/home/yygx/PANDA/pipeline/data/meshes/rubik_cube/mesh.obj",
+    "wooden_tray": "/home/yygx/PANDA/pipeline/data/meshes/wooden_tray/mesh.obj",
     "_comment": "Paths to object mesh files for FoundationPose"
   },
 
@@ -60,6 +63,9 @@
     "parmesan_cheese": "tall green cylindrical parmesan can",
     "peaches_can": "small red can",
     "yellow_mustard": "yellow mustard bottle",
+    "cocoa": "brown cocoa powder container",
+    "rubik_cube": "colorful rubik cube",
+    "wooden_tray": "wooden serving tray",
     "_comment": "YOLOE text prompts for each object"
   },
 
@@ -67,7 +73,7 @@
     "save_debug": true,
     "debug_dir": "/home/yygx/PANDA/pipeline/data/registration",
     "registration_iteration": 3,
-    "registration_conf": 0.1,
+    "registration_conf": 0.05,
     "_comment": "Registration settings and debug save directory"
   },
 
@@ -93,20 +99,20 @@
   },
 
   "vla_execution": {
-    "max_timesteps": 400,
+    "max_timesteps": 200,
     "open_loop_horizon": 8,
     "gripper_threshold": 0.5,
     "_comment": "gripper > 0.5 means open (0), gripper <= 0.5 means close (1)"
   },
 
   "success_checking": {
-    "pick": {
+    "object_lifted": {
       "min_height_increase": 0.03,
       "stable_timeout": 2.0
     },
-    "place": {
+    "object_on_target": {
       "xy_distance_threshold": 0.05,
-      "z_height_tolerance": 0.02,
+      "z_buffer_distance": 0.02,
       "stable_timeout": 2.0
     }
   },

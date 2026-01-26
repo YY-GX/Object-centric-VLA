@@ -6,7 +6,10 @@ Handles VLA skill execution with continuous object tracking,
 distractor masking, and success checking.
 """
 
+import os
+import csv
 import time
+from datetime import datetime
 import numpy as np
 from typing import Dict, List, Optional, Any
 
@@ -15,6 +18,95 @@ from .distractor_masking import apply_distractor_rectangle_masking
 
 # DROID data collection frequency
 DROID_CONTROL_FREQUENCY = 15
+
+# Hardcoded save directory
+VLA_OUTPUT_DIR = "/home/yygx/PANDA/pipeline/outputs"
+
+
+def _save_rollout_data(
+    save_dir: str,
+    left_images: List[np.ndarray],
+    wrist_images: List[np.ndarray],
+    states: List[Dict],
+    actions: List[Dict]
+) -> None:
+    """
+    Save rollout data to disk.
+
+    Args:
+        save_dir: Directory to save data
+        left_images: List of left camera images (RGB)
+        wrist_images: List of wrist camera images (RGB)
+        states: List of state dicts with t, cartesian_position, gripper_position
+        actions: List of action dicts with t, action
+    """
+    if not left_images:
+        print("   ⚠️  No rollout data to save")
+        return
+
+    try:
+        from moviepy.editor import ImageSequenceClip
+    except ImportError:
+        print("   ⚠️  moviepy not installed, skipping video saving")
+        return
+
+    print(f"   💾 Saving rollout data ({len(left_images)} frames)...")
+
+    # Save left_video.mp4
+    try:
+        left_video_path = os.path.join(save_dir, "left_video.mp4")
+        left_clip = ImageSequenceClip(list(left_images), fps=10)
+        left_clip.write_videofile(left_video_path, codec="libx264", verbose=False, logger=None)
+        print(f"      ✓ Saved left_video.mp4")
+    except Exception as e:
+        print(f"      ✗ Failed to save left_video.mp4: {e}")
+
+    # Save wrist_video.mp4
+    try:
+        wrist_video_path = os.path.join(save_dir, "wrist_video.mp4")
+        wrist_clip = ImageSequenceClip(list(wrist_images), fps=10)
+        wrist_clip.write_videofile(wrist_video_path, codec="libx264", verbose=False, logger=None)
+        print(f"      ✓ Saved wrist_video.mp4")
+    except Exception as e:
+        print(f"      ✗ Failed to save wrist_video.mp4: {e}")
+
+    # Save state.csv
+    try:
+        state_path = os.path.join(save_dir, "state.csv")
+        with open(state_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["t", "x", "y", "z", "roll", "pitch", "yaw", "gripper"])
+            for s in states:
+                cart = s["cartesian_position"]
+                writer.writerow([
+                    s["t"],
+                    cart[0], cart[1], cart[2],
+                    cart[3], cart[4], cart[5],
+                    s["gripper_position"]
+                ])
+        print(f"      ✓ Saved state.csv")
+    except Exception as e:
+        print(f"      ✗ Failed to save state.csv: {e}")
+
+    # Save action.csv
+    try:
+        action_path = os.path.join(save_dir, "action.csv")
+        with open(action_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["t", "dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"])
+            for a in actions:
+                act = a["action"]
+                writer.writerow([
+                    a["t"],
+                    act[0], act[1], act[2],
+                    act[3], act[4], act[5],
+                    act[6]
+                ])
+        print(f"      ✓ Saved action.csv")
+    except Exception as e:
+        print(f"      ✗ Failed to save action.csv: {e}")
+
+    print(f"   ✅ Rollout data saved to: {save_dir}")
 
 
 def execute_vla_skill(
@@ -31,7 +123,8 @@ def execute_vla_skill(
     yoloe_text_prompts: Optional[Dict] = None,
     csv_logger: Optional[Any] = None,
     get_tracked_objects_func=None,
-    get_distractor_objects_func=None
+    get_distractor_objects_func=None,
+    save_rollout: bool = True
 ) -> Dict:
     """
     Execute VLA skill with continuous object tracking and success checking.
@@ -51,6 +144,7 @@ def execute_vla_skill(
         csv_logger: CSV logger instance (optional)
         get_tracked_objects_func: Function to get objects to track for skill
         get_distractor_objects_func: Function to get distractor objects for skill
+        save_rollout: Whether to save rollout videos and CSVs (default True)
 
     Returns:
         Dict with "success" and "reason"
@@ -71,6 +165,19 @@ def execute_vla_skill(
 
     actions_from_chunk_completed = 0
     pred_action_chunk = None
+
+    # Data collection for rollout saving
+    rollout_left_images = []
+    rollout_wrist_images = []
+    rollout_states = []
+    rollout_actions = []
+    rollout_save_dir = None
+    if save_rollout:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        skill_name = skill_info.get("language", "skill").replace(" ", "_").replace(".", "")
+        rollout_save_dir = os.path.join(VLA_OUTPUT_DIR, f"{skill_name}_{timestamp}")
+        os.makedirs(rollout_save_dir, exist_ok=True)
+        print(f"   📁 Rollout will be saved to: {rollout_save_dir}")
 
     # Relative pose state tracking (for is_relative_pose)
     is_relative_pose = robot_config.get("is_relative_pose", False)
@@ -95,12 +202,16 @@ def execute_vla_skill(
         # Get current observation
         obs = robot_env.get_observation()
 
+        # Camera returns BGRA, convert to RGB for FoundationPose
+        bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
+        rgb_image = bgra_image[..., :3][..., ::-1]  # Strip alpha, then BGR to RGB
+
         # Track all objects and check for success
         current_states = {}
         for obj_name in objects_to_track:
             pose_result = pose_client.get_pose(
                 object_name=obj_name,
-                rgb=get_camera_data(obs, 'left', robot_config, 'image'),
+                rgb=rgb_image,
                 depth=get_camera_data(obs, 'left', robot_config, 'depth'),
                 K=K,
                 iteration=robot_config["tracking"]["tracking_iteration"]
@@ -125,6 +236,9 @@ def execute_vla_skill(
 
             if success_result["success"]:
                 print(f"   ✅ Success detected at step {t_step}: {success_result['reason']}")
+                # Save rollout data before returning
+                if save_rollout and rollout_save_dir:
+                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
                 return {"success": True, "reason": f"Success at step {t_step}"}
 
         # Detect distractor objects for random erasing (if enabled)
@@ -133,8 +247,8 @@ def execute_vla_skill(
             distractors = get_distractor_objects_func(skill_info)
             if distractors:
                 wrist_image = get_camera_data(obs, 'wrist', robot_config, 'image')
-                # Convert BGR to RGB for YOLOE
-                wrist_image_rgb = wrist_image[..., ::-1] if wrist_image is not None else None
+                # Convert BGRA to RGB for YOLOE (strip alpha first, then reverse BGR to RGB)
+                wrist_image_rgb = wrist_image[..., :3][..., ::-1] if wrist_image is not None else None
                 if wrist_image_rgb is not None:
                     distractor_mask = yoloe_client.detect_and_union(
                         wrist_image_rgb,
@@ -183,6 +297,16 @@ def execute_vla_skill(
             masked_wrist_image=masked_wrist_image
         )
 
+        # Collect data for rollout saving
+        if save_rollout:
+            rollout_left_images.append(vla_obs["left_image"].copy())
+            rollout_wrist_images.append(vla_obs["wrist_image"].copy())
+            rollout_states.append({
+                "t": t_step,
+                "cartesian_position": vla_obs["cartesian_position"].copy(),
+                "gripper_position": float(vla_obs["gripper_position"][0])
+            })
+
         # Query VLA server for new action chunk
         if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= open_loop_horizon:
             actions_from_chunk_completed = 0
@@ -193,6 +317,9 @@ def execute_vla_skill(
                 )
             except Exception as e:
                 print(f"   ❌ VLA prediction failed: {e}")
+                # Save rollout data before returning
+                if save_rollout and rollout_save_dir:
+                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
                 return {"success": False, "reason": f"VLA prediction error: {e}"}
 
         # Select action from chunk
@@ -208,6 +335,13 @@ def execute_vla_skill(
         # Clip action to safe range
         action = np.clip(action, -1, 1)
 
+        # Collect action for rollout saving (after binarization and clipping)
+        if save_rollout:
+            rollout_actions.append({
+                "t": t_step,
+                "action": action.copy()
+            })
+
         # Log actions and state
         if csv_logger is not None:
             csv_logger.log_step(t_step, action, obs["robot_state"])
@@ -217,12 +351,19 @@ def execute_vla_skill(
             robot_env.step(action)
         except Exception as e:
             print(f"   ❌ Robot step failed: {e}")
+            # Save rollout data before returning
+            if save_rollout and rollout_save_dir:
+                _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
             return {"success": False, "reason": f"Robot step error: {e}"}
 
         # Sleep to match DROID control frequency
         elapsed_time = time.time() - start_time_step
         if elapsed_time < 1 / DROID_CONTROL_FREQUENCY:
             time.sleep(1 / DROID_CONTROL_FREQUENCY - elapsed_time)
+
+    # Save rollout data after loop completes
+    if save_rollout and rollout_save_dir:
+        _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
 
     print(f"   ✅ Completed VLA execution with tracking ({max_timesteps} steps)")
     return {"success": True, "reason": "Completed"}

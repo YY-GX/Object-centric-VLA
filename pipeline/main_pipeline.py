@@ -159,8 +159,14 @@ class RealRobotPipeline:
 
         # ========== [2.1.6.1] Robot environment ==========
         print("1️⃣  Initializing robot environment...")
-        self.robot_env = RobotEnv()
-        print("   ✓ RobotEnv initialized\n")
+        # Enable depth capture for all camera types
+        camera_kwargs = {
+            "hand_camera": {"depth": True},
+            "varied_camera": {"depth": True},
+            "fixed_camera": {"depth": True}
+        }
+        self.robot_env = RobotEnv(camera_kwargs=camera_kwargs)
+        print("   ✓ RobotEnv initialized (depth enabled)\n")
 
         # ========== [2.1.6.2] FoundationPose client ==========
         print("2️⃣  Connecting to FoundationPose server...")
@@ -221,7 +227,7 @@ class RealRobotPipeline:
             print(f"  Full pose matrix (base frame):")
             print(f"{pose_base}")
         print(f"\n{'='*80}\n")
-        exit(0)
+        # exit(0)
 
     # ========== [2.2] MAIN EXECUTION ==========
 
@@ -412,9 +418,11 @@ class RealRobotPipeline:
             if obj_name in initial_states:
                 continue
 
+            # Camera returns BGR, convert to RGB for FoundationPose
+            bgr_image = get_camera_data(obs, 'left', self.robot_config, 'image')
             pose_result = self.object_pose_client.get_pose(
                 object_name=obj_name,
-                rgb=get_camera_data(obs, 'left', self.robot_config, 'image'),
+                rgb=bgr_image[..., ::-1],  # BGR to RGB
                 depth=get_camera_data(obs, 'left', self.robot_config, 'depth'),
                 K=K,
                 iteration=self.robot_config["tracking"]["tracking_iteration"]
@@ -487,9 +495,11 @@ class RealRobotPipeline:
         final_object_poses = {}
 
         for obj_name in objects_to_track:
+            # Camera returns BGR, convert to RGB for FoundationPose
+            bgr_image_final = get_camera_data(obs_final, 'left', self.robot_config, 'image')
             final_pose_result = self.object_pose_client.get_pose(
                 object_name=obj_name,
-                rgb=get_camera_data(obs_final, 'left', self.robot_config, 'image'),
+                rgb=bgr_image_final[..., ::-1],  # BGR to RGB
                 depth=get_camera_data(obs_final, 'left', self.robot_config, 'depth'),
                 K=K,
                 iteration=self.robot_config["tracking"]["tracking_iteration"]
@@ -571,10 +581,10 @@ class RealRobotPipeline:
             success_checker=self.success_checker,
             robot_config=self.robot_config,
             registration_dict=self.registration_dict,
-            execute_vla_skill_func=lambda si, ist, k, csv: execute_vla_skill(
-                skill_info=si,
-                initial_states=ist,
-                K=k,
+            execute_vla_skill_func=lambda skill_info, initial_states, K, csv_logger: execute_vla_skill(
+                skill_info=skill_info,
+                initial_states=initial_states,
+                K=K,
                 robot_env=self.robot_env,
                 vla_client=self.vla_client,
                 pose_client=self.object_pose_client,
@@ -583,7 +593,7 @@ class RealRobotPipeline:
                 registration_dict=self.registration_dict,
                 yoloe_client=self.yoloe_client,
                 yoloe_text_prompts=self.yoloe_text_prompts,
-                csv_logger=csv,
+                csv_logger=csv_logger,
                 get_tracked_objects_func=get_tracked_objects_for_skill,
                 get_distractor_objects_func=lambda s: get_distractor_objects(s, self.task_config, self.task_name)
             ),
@@ -609,10 +619,10 @@ class RealRobotPipeline:
             success_checker=self.success_checker,
             robot_config=self.robot_config,
             registration_dict=self.registration_dict,
-            execute_vla_skill_func=lambda si, ist, k, csv: execute_vla_skill(
-                skill_info=si,
-                initial_states=ist,
-                K=k,
+            execute_vla_skill_func=lambda skill_info, initial_states, K, csv_logger: execute_vla_skill(
+                skill_info=skill_info,
+                initial_states=initial_states,
+                K=K,
                 robot_env=self.robot_env,
                 vla_client=self.vla_client,
                 pose_client=self.object_pose_client,
@@ -621,7 +631,7 @@ class RealRobotPipeline:
                 registration_dict=self.registration_dict,
                 yoloe_client=self.yoloe_client,
                 yoloe_text_prompts=self.yoloe_text_prompts,
-                csv_logger=csv,
+                csv_logger=csv_logger,
                 get_tracked_objects_func=get_tracked_objects_for_skill,
                 get_distractor_objects_func=lambda s: get_distractor_objects(s, self.task_config, self.task_name)
             ),
@@ -655,7 +665,7 @@ def main():
     parser.add_argument(
         "--max_retries",
         type=int,
-        default=3,
+        default=1,
         help="Maximum retries per skill"
     )
 

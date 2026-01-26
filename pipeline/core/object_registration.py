@@ -99,7 +99,9 @@ def run_registration_phase(
         # Get current observation
         print("📸 Capturing current frame...")
         obs = robot_env.get_observation()
-        rgb = get_camera_data(obs, 'left', robot_config, 'image')
+        # Camera returns BGRA, convert to RGB for YOLOE/FoundationPose
+        bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
+        rgb = bgra_image[..., :3][..., ::-1]  # Strip alpha, then BGR to RGB
         depth = get_camera_data(obs, 'left', robot_config, 'depth')
         print(f"✓ Captured RGB: {rgb.shape}, Depth: {depth.shape} (converted to meters)\n")
 
@@ -215,18 +217,11 @@ def _get_scene_objects_for_task(
     Returns:
         Set of scene object names
     """
-    # Get task info to find scene_objects
-    scene_objects = set()
+    # Find task by matching skill_sequence exactly
+    for task in task_config.get("long_horizon_tasks", []):
+        task_skills = task.get("skills", [])
+        if task_skills == skill_sequence:
+            return set(task.get("scene_objects", []))
 
-    # Try to get from first skill's target object task
-    if skill_sequence:
-        skill_info = get_skill_info_func(skill_sequence[0], task_config)
-        if skill_info and "target_object" in skill_info:
-            target = skill_info["target_object"]
-            # Find task that contains this target
-            for task in task_config.get("long_horizon_tasks", []):
-                if target in task.get("scene_objects", []):
-                    scene_objects = set(task.get("scene_objects", []))
-                    break
-
-    return scene_objects
+    # Fallback: return empty set if no match found
+    return set()
