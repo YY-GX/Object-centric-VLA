@@ -1,6 +1,10 @@
 {
   "_comment": "Hardware and deployment configuration for real robot pipeline",
 
+  "vla_model": "pi05",
+  "_vla_model_options": ["pi05", "openvla-oft"],
+  "_vla_model_comment": "pi05 uses joint_position (7D) and joint_velocity actions (8D). openvla-oft uses cartesian_position (6D) and cartesian_velocity actions (7D).",
+
   "is_randome_erasing": true,
   "is_relative_pose": true,
   "is_visual_ref_yoloe": true,

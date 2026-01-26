@@ -4,6 +4,8 @@ VLA Skill Executor for Real Robot Pipeline.
 
 Handles VLA skill execution with continuous object tracking,
 distractor masking, and success checking.
+
+Supports both OpenVLA-OFT (cartesian) and Pi 0.5 (joint) models.
 """
 
 import os
@@ -28,7 +30,8 @@ def _save_rollout_data(
     left_images: List[np.ndarray],
     wrist_images: List[np.ndarray],
     states: List[Dict],
-    actions: List[Dict]
+    actions: List[Dict],
+    model_type: str = "pi05"
 ) -> None:
     """
     Save rollout data to disk.
@@ -39,36 +42,37 @@ def _save_rollout_data(
         wrist_images: List of wrist camera images (RGB)
         states: List of state dicts with t, cartesian_position, gripper_position
         actions: List of action dicts with t, action
+        model_type: VLA model type for proper action CSV headers
     """
     if not left_images:
-        print("   ⚠️  No rollout data to save")
+        print("   Warning: No rollout data to save")
         return
 
     try:
         from moviepy.editor import ImageSequenceClip
     except ImportError:
-        print("   ⚠️  moviepy not installed, skipping video saving")
+        print("   Warning: moviepy not installed, skipping video saving")
         return
 
-    print(f"   💾 Saving rollout data ({len(left_images)} frames)...")
+    print(f"   Saving rollout data ({len(left_images)} frames)...")
 
     # Save left_video.mp4
     try:
         left_video_path = os.path.join(save_dir, "left_video.mp4")
         left_clip = ImageSequenceClip(list(left_images), fps=10)
         left_clip.write_videofile(left_video_path, codec="libx264", verbose=False, logger=None)
-        print(f"      ✓ Saved left_video.mp4")
+        print(f"      Saved left_video.mp4")
     except Exception as e:
-        print(f"      ✗ Failed to save left_video.mp4: {e}")
+        print(f"      Failed to save left_video.mp4: {e}")
 
     # Save wrist_video.mp4
     try:
         wrist_video_path = os.path.join(save_dir, "wrist_video.mp4")
         wrist_clip = ImageSequenceClip(list(wrist_images), fps=10)
         wrist_clip.write_videofile(wrist_video_path, codec="libx264", verbose=False, logger=None)
-        print(f"      ✓ Saved wrist_video.mp4")
+        print(f"      Saved wrist_video.mp4")
     except Exception as e:
-        print(f"      ✗ Failed to save wrist_video.mp4: {e}")
+        print(f"      Failed to save wrist_video.mp4: {e}")
 
     # Save state.csv
     try:
@@ -84,29 +88,38 @@ def _save_rollout_data(
                     cart[3], cart[4], cart[5],
                     s["gripper_position"]
                 ])
-        print(f"      ✓ Saved state.csv")
+        print(f"      Saved state.csv")
     except Exception as e:
-        print(f"      ✗ Failed to save state.csv: {e}")
+        print(f"      Failed to save state.csv: {e}")
 
-    # Save action.csv
+    # Save action.csv (format depends on model type)
     try:
         action_path = os.path.join(save_dir, "action.csv")
         with open(action_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["t", "dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"])
-            for a in actions:
-                act = a["action"]
-                writer.writerow([
-                    a["t"],
-                    act[0], act[1], act[2],
-                    act[3], act[4], act[5],
-                    act[6]
-                ])
-        print(f"      ✓ Saved action.csv")
+            if model_type == "pi05":
+                # 8D action: 7 joint velocities + gripper
+                writer.writerow(["t", "j1", "j2", "j3", "j4", "j5", "j6", "j7", "gripper"])
+                for a in actions:
+                    act = a["action"]
+                    writer.writerow([
+                        a["t"],
+                        act[0], act[1], act[2], act[3], act[4], act[5], act[6], act[7]
+                    ])
+            else:
+                # 7D action: 6 cartesian deltas + gripper
+                writer.writerow(["t", "dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"])
+                for a in actions:
+                    act = a["action"]
+                    writer.writerow([
+                        a["t"],
+                        act[0], act[1], act[2], act[3], act[4], act[5], act[6]
+                    ])
+        print(f"      Saved action.csv")
     except Exception as e:
-        print(f"      ✗ Failed to save action.csv: {e}")
+        print(f"      Failed to save action.csv: {e}")
 
-    print(f"   ✅ Rollout data saved to: {save_dir}")
+    print(f"   Rollout data saved to: {save_dir}")
 
 
 def execute_vla_skill(
@@ -129,12 +142,14 @@ def execute_vla_skill(
     """
     Execute VLA skill with continuous object tracking and success checking.
 
+    Supports both Pi 0.5 (joint velocity) and OpenVLA-OFT (cartesian velocity) models.
+
     Args:
         skill_info: Skill information from task config
         initial_states: Initial object poses for success checking
         K: Camera intrinsics
         robot_env: Robot environment
-        vla_client: VLA client for predictions
+        vla_client: VLA client for predictions (has model_type attribute)
         pose_client: FoundationPose client for tracking
         success_checker: Success checker instance
         robot_config: Robot configuration dict
@@ -155,8 +170,12 @@ def execute_vla_skill(
     mesh_paths = {name: info["mesh_path"] for name, info in registration_dict.items()}
 
     if robot_env is None:
-        print(f"   ⚠️  Robot environment not available")
+        print(f"   Warning: Robot environment not available")
         return {"success": False, "reason": "Robot environment not available"}
+
+    # Get VLA model type from client
+    model_type = getattr(vla_client, 'model_type', 'pi05')
+    print(f"   VLA model type: {model_type}")
 
     vla_config = robot_config["vla_execution"]
     max_timesteps = vla_config["max_timesteps"]
@@ -177,10 +196,10 @@ def execute_vla_skill(
         skill_name = skill_info.get("language", "skill").replace(" ", "_").replace(".", "")
         rollout_save_dir = os.path.join(VLA_OUTPUT_DIR, f"{skill_name}_{timestamp}")
         os.makedirs(rollout_save_dir, exist_ok=True)
-        print(f"   📁 Rollout will be saved to: {rollout_save_dir}")
+        print(f"   Rollout will be saved to: {rollout_save_dir}")
 
-    # Relative pose state tracking (for is_relative_pose)
-    is_relative_pose = robot_config.get("is_relative_pose", False)
+    # Relative pose state tracking (for is_relative_pose) - only for openvla-oft
+    is_relative_pose = robot_config.get("is_relative_pose", False) and model_type == "openvla-oft"
     is_pick_skill = skill_info.get("skill_type") == "pick"
     target_object = skill_info.get("target_object")
     object_pos = None
@@ -188,13 +207,13 @@ def execute_vla_skill(
         pose_base = registration_dict[target_object]["pose_base"]
         object_pos = pose_base[:3, 3]  # Extract position from 4x4 matrix
 
-    # Stage tracking for pick skills
+    # Stage tracking for pick skills (only for openvla-oft with relative pose)
     gripper_history = []
     stage1_ended = False
     stage1_end_cart_pos = None
 
     for t_step in range(max_timesteps):
-        print(f"   🔄 Step {t_step} of {max_timesteps}")
+        print(f"   Step {t_step} of {max_timesteps}")
 
         # Start timing at the beginning of loop iteration
         start_time_step = time.time()
@@ -235,10 +254,10 @@ def execute_vla_skill(
             )
 
             if success_result["success"]:
-                print(f"   ✅ Success detected at step {t_step}: {success_result['reason']}")
+                print(f"   Success detected at step {t_step}: {success_result['reason']}")
                 # Save rollout data before returning
                 if save_rollout and rollout_save_dir:
-                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
+                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
                 return {"success": True, "reason": f"Success at step {t_step}"}
 
         # Detect distractor objects for random erasing (if enabled)
@@ -263,33 +282,36 @@ def execute_vla_skill(
                             distractor_mask,
                             max_rectangles=5
                         )
-                        print(f"   🎭 Applied distractor masking ({distractor_mask.sum()} pixels detected)")
+                        print(f"   Applied distractor masking ({distractor_mask.sum()} pixels detected)")
 
         # Stage detection for pick skills (detect stage 1 end by looking at past gripper values)
-        current_gripper = obs["robot_state"]["gripper_position"]
-        gripper_history.append(current_gripper)
+        # Only for openvla-oft with relative pose
+        if is_relative_pose:
+            current_gripper = obs["robot_state"]["gripper_position"]
+            gripper_history.append(current_gripper)
 
-        if is_relative_pose and is_pick_skill and not stage1_ended and len(gripper_history) >= 4:
-            # Check if gripper closed and stable for past 3 steps
-            g = gripper_history
-            gripper_stable_threshold = 1e-4
-            # Gripper closed (current value high) and stable
-            if (g[-1] > 0.5 and  # Gripper closed
-                abs(g[-1] - g[-2]) < gripper_stable_threshold and
-                abs(g[-2] - g[-3]) < gripper_stable_threshold and
-                abs(g[-3] - g[-4]) < gripper_stable_threshold):
-                stage1_ended = True
-                # Compute and store the relative pose at this moment
-                ee_pos = np.array(obs["robot_state"]["cartesian_position"])
-                if object_pos is not None:
-                    rel_pos = ee_pos[:3] - object_pos
-                    stage1_end_cart_pos = np.concatenate([rel_pos, ee_pos[3:]])
-                    print(f"   📍 Stage 1 ended at step {t_step}, freezing relative pose")
+            if is_pick_skill and not stage1_ended and len(gripper_history) >= 4:
+                # Check if gripper closed and stable for past 3 steps
+                g = gripper_history
+                gripper_stable_threshold = 1e-4
+                # Gripper closed (current value high) and stable
+                if (g[-1] > 0.5 and  # Gripper closed
+                    abs(g[-1] - g[-2]) < gripper_stable_threshold and
+                    abs(g[-2] - g[-3]) < gripper_stable_threshold and
+                    abs(g[-3] - g[-4]) < gripper_stable_threshold):
+                    stage1_ended = True
+                    # Compute and store the relative pose at this moment
+                    ee_pos = np.array(obs["robot_state"]["cartesian_position"])
+                    if object_pos is not None:
+                        rel_pos = ee_pos[:3] - object_pos
+                        stage1_end_cart_pos = np.concatenate([rel_pos, ee_pos[3:]])
+                        print(f"   Stage 1 ended at step {t_step}, freezing relative pose")
 
         # Prepare observation for VLA
         vla_obs = prepare_vla_observation(
             obs,
             robot_config,
+            model_type=model_type,
             object_pos=object_pos,
             is_pick_skill=is_pick_skill,
             stage1_ended=stage1_ended,
@@ -303,7 +325,7 @@ def execute_vla_skill(
             rollout_wrist_images.append(vla_obs["wrist_image"].copy())
             rollout_states.append({
                 "t": t_step,
-                "cartesian_position": vla_obs["cartesian_position"].copy(),
+                "cartesian_position": np.array(obs["robot_state"]["cartesian_position"]).copy(),
                 "gripper_position": float(vla_obs["gripper_position"][0])
             })
 
@@ -316,21 +338,33 @@ def execute_vla_skill(
                     vla_obs, language, open_loop_horizon
                 )
             except Exception as e:
-                print(f"   ❌ VLA prediction failed: {e}")
+                print(f"   VLA prediction failed: {e}")
                 # Save rollout data before returning
                 if save_rollout and rollout_save_dir:
-                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
+                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
                 return {"success": False, "reason": f"VLA prediction error: {e}"}
 
         # Select action from chunk
         action = pred_action_chunk[actions_from_chunk_completed]
         actions_from_chunk_completed += 1
 
-        # Binarize gripper action (match evaluate_openvla_oft.py pattern)
-        if action[6] > gripper_threshold:
-            action = np.concatenate([action[:6], np.zeros((1,))])  # Open
+        # Binarize gripper action based on model type
+        # Pi 0.5: action[7] is gripper, >0.5 means open (1), <=0.5 means close (0)
+        # OpenVLA-OFT: action[6] is gripper, >0.5 means open (0), <=0.5 means close (1)
+        if model_type == "pi05":
+            # Pi 0.5: 8D action [j1..j7, gripper]
+            # Gripper logic: >0.5 means open (1), <=0.5 means close (0)
+            if action[7] > gripper_threshold:
+                action = np.concatenate([action[:7], np.ones((1,))])   # Open
+            else:
+                action = np.concatenate([action[:7], np.zeros((1,))])  # Close
         else:
-            action = np.concatenate([action[:6], np.ones((1,))])   # Close
+            # OpenVLA-OFT: 7D action [dx..dyaw, gripper]
+            # Gripper logic: >0.5 means open (0), <=0.5 means close (1)
+            if action[6] > gripper_threshold:
+                action = np.concatenate([action[:6], np.zeros((1,))])  # Open
+            else:
+                action = np.concatenate([action[:6], np.ones((1,))])   # Close
 
         # Clip action to safe range
         action = np.clip(action, -1, 1)
@@ -350,10 +384,10 @@ def execute_vla_skill(
         try:
             robot_env.step(action)
         except Exception as e:
-            print(f"   ❌ Robot step failed: {e}")
+            print(f"   Robot step failed: {e}")
             # Save rollout data before returning
             if save_rollout and rollout_save_dir:
-                _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
+                _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
             return {"success": False, "reason": f"Robot step error: {e}"}
 
         # Sleep to match DROID control frequency
@@ -363,15 +397,16 @@ def execute_vla_skill(
 
     # Save rollout data after loop completes
     if save_rollout and rollout_save_dir:
-        _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions)
+        _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
 
-    print(f"   ✅ Completed VLA execution with tracking ({max_timesteps} steps)")
+    print(f"   Completed VLA execution with tracking ({max_timesteps} steps)")
     return {"success": True, "reason": "Completed"}
 
 
 def prepare_vla_observation(
     obs: Dict,
     robot_config: Dict,
+    model_type: str = "pi05",
     object_pos: np.ndarray = None,
     is_pick_skill: bool = False,
     stage1_ended: bool = False,
@@ -384,6 +419,7 @@ def prepare_vla_observation(
     Args:
         obs: Raw observation from robot_env
         robot_config: Robot configuration dict
+        model_type: VLA model type ("pi05" or "openvla-oft")
         object_pos: Object position for relative pose (None = use absolute)
         is_pick_skill: Whether current skill is a pick skill
         stage1_ended: Whether pick stage 1 has ended
@@ -391,7 +427,7 @@ def prepare_vla_observation(
         masked_wrist_image: Pre-masked wrist image (RGB), if provided overrides obs wrist image
 
     Returns:
-        Observation dict for VLA
+        Observation dict for VLA with model-specific fields
     """
     image_obs = obs["image"]
     robot_state = obs["robot_state"]
@@ -416,25 +452,36 @@ def prepare_vla_observation(
     if masked_wrist_image is not None:
         wrist_image = masked_wrist_image
 
-    # Compute cartesian_position (relative or absolute)
-    abs_cart_pos = np.array(robot_state["cartesian_position"])
-    is_relative_pose = robot_config.get("is_relative_pose", False)
-
-    if is_relative_pose and object_pos is not None:
-        if is_pick_skill and stage1_ended and stage1_end_cart_pos is not None:
-            # Pick skill stage 2: use frozen relative pose
-            cart_pos = stage1_end_cart_pos
-        else:
-            # Stage 1 or place skill: compute relative position + original orientation
-            rel_pos = abs_cart_pos[:3] - object_pos
-            cart_pos = np.concatenate([rel_pos, abs_cart_pos[3:]])
-    else:
-        # Use absolute position
-        cart_pos = abs_cart_pos
-
-    return {
+    # Build observation dict based on model type
+    vla_obs = {
         "left_image": left_image,
         "wrist_image": wrist_image,
-        "cartesian_position": cart_pos,
         "gripper_position": np.array([robot_state["gripper_position"]])
     }
+
+    if model_type == "pi05":
+        # Pi 0.5 uses joint positions (7D)
+        joint_positions = np.array(robot_state["joint_positions"])
+        vla_obs["joint_position"] = joint_positions
+        # Also include cartesian for logging purposes
+        vla_obs["cartesian_position"] = np.array(robot_state["cartesian_position"])
+    else:
+        # OpenVLA-OFT uses cartesian position (6D)
+        abs_cart_pos = np.array(robot_state["cartesian_position"])
+        is_relative_pose = robot_config.get("is_relative_pose", False)
+
+        if is_relative_pose and object_pos is not None:
+            if is_pick_skill and stage1_ended and stage1_end_cart_pos is not None:
+                # Pick skill stage 2: use frozen relative pose
+                cart_pos = stage1_end_cart_pos
+            else:
+                # Stage 1 or place skill: compute relative position + original orientation
+                rel_pos = abs_cart_pos[:3] - object_pos
+                cart_pos = np.concatenate([rel_pos, abs_cart_pos[3:]])
+        else:
+            # Use absolute position
+            cart_pos = abs_cart_pos
+
+        vla_obs["cartesian_position"] = cart_pos
+
+    return vla_obs

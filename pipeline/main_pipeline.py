@@ -165,8 +165,19 @@ class RealRobotPipeline:
             "varied_camera": {"depth": True},
             "fixed_camera": {"depth": True}
         }
-        self.robot_env = RobotEnv(camera_kwargs=camera_kwargs)
-        print("   ✓ RobotEnv initialized (depth enabled)\n")
+        # Set action space based on VLA model type
+        # Pi 0.5 uses joint_velocity, OpenVLA-OFT uses cartesian_velocity
+        vla_model = self.robot_config.get("vla_model", "pi05")
+        if vla_model == "pi05":
+            action_space = "joint_velocity"
+        else:
+            action_space = "cartesian_velocity"
+        self.robot_env = RobotEnv(
+            action_space=action_space,
+            gripper_action_space="position",
+            camera_kwargs=camera_kwargs
+        )
+        print(f"   ✓ RobotEnv initialized (action_space={action_space}, depth enabled)\n")
 
         # ========== [2.1.6.2] FoundationPose client ==========
         print("2️⃣  Connecting to FoundationPose server...")
@@ -191,9 +202,11 @@ class RealRobotPipeline:
         # ========== [2.1.6.5] VLA client ==========
         print("5️⃣  Connecting to VLA server...")
         vla_config = self.robot_config["vla_server"]
+        vla_model = self.robot_config.get("vla_model", "pi05")
         self.vla_client = VLAClient(
             host=vla_config["host"],
-            port=vla_config["port"]
+            port=vla_config["port"],
+            model_type=vla_model
         )
         print()
 
