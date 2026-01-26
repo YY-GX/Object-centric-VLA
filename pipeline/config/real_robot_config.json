@@ -128,6 +128,14 @@
     "save_dir": "scripts/phase4_real_robot/local_scripts/pipeline/outputs"
   },
 
+  "full_pipeline_video": {
+    "enabled": true,
+    "fps": 15,
+    "save_3rd_person": true,
+    "save_wrist": true,
+    "_comment": "Records entire pipeline (registration + motion planning + VLA) from both cameras"
+  },
+
   "tracking": {
     "tracking_iteration": 5,
     "_comment": "Number of refinement iterations during tracking"

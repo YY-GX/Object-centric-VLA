@@ -60,7 +60,8 @@ from utils import (
     plan_task_sequence,
     get_skill_info,
     VideoRecorder,
-    CSVLogger
+    CSVLogger,
+    FullPipelineVideoRecorder
 )
 
 try:
@@ -179,6 +180,19 @@ class RealRobotPipeline:
         )
         print(f"   ✓ RobotEnv initialized (action_space={action_space}, depth enabled)\n")
 
+        # ========== [2.1.6.1b] Full pipeline video recorder ==========
+        self.full_video_recorder = None
+        video_config = self.robot_config.get("full_pipeline_video", {})
+        if video_config.get("enabled", False):
+            print("1️⃣b Initializing full pipeline video recorder...")
+            self.full_video_recorder = FullPipelineVideoRecorder(
+                robot_env=self.robot_env,
+                robot_config=self.robot_config,
+                save_dir=str(self.run_dir),
+                fps=video_config.get("fps", 15)
+            )
+            print()
+
         # ========== [2.1.6.2] FoundationPose client ==========
         print("2️⃣  Connecting to FoundationPose server...")
         fp_config = self.robot_config["foundationpose_server"]
@@ -274,6 +288,11 @@ class RealRobotPipeline:
         else:
             csv_logger = None
 
+        # ========== [2.2.1b] Start full pipeline video recording ==========
+        if self.full_video_recorder is not None:
+            self.full_video_recorder.start_recording()
+            print("📹 Started full pipeline video recording\n")
+
         # Track initial object states
         initial_states = {}
         previous_pick_skill_info = None
@@ -351,6 +370,16 @@ class RealRobotPipeline:
         # ========== [2.2.3] Cleanup and summary ==========
         if csv_logger is not None:
             csv_logger.close()
+
+        # ========== [2.2.3b] Stop and save full pipeline video ==========
+        if self.full_video_recorder is not None:
+            task_dir_name = self.task_name.replace(" ", "_")
+            video_paths = self.full_video_recorder.stop_and_save(f"full_pipeline_{task_dir_name}")
+            if video_paths:
+                print(f"📹 Full pipeline videos saved:")
+                for name, path in video_paths.items():
+                    print(f"   - {name}: {path}")
+                print()
 
         print(f"\n{'='*80}")
         print(f"📊 TASK EXECUTION SUMMARY")
