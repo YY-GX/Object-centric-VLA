@@ -45,6 +45,7 @@
 
   "object_meshes": {
     "red_cup": "/home/yygx/PANDA/pipeline/data/meshes/red_cup/mesh.obj",
+    "white_cup": "/home/yygx/PANDA/pipeline/data/meshes/white_cup/mesh.obj",
     "plate": "/home/yygx/PANDA/pipeline/data/meshes/plate/mesh.obj",
     "basket": "/home/yygx/PANDA/pipeline/data/meshes/basket/mesh.obj",
     "corn": "/home/yygx/PANDA/pipeline/data/meshes/corn/mesh.obj",
@@ -55,11 +56,14 @@
     "cocoa": "/home/yygx/PANDA/pipeline/data/meshes/cocoa/mesh.obj",
     "rubik_cube": "/home/yygx/PANDA/pipeline/data/meshes/rubik_cube/mesh.obj",
     "wooden_tray": "/home/yygx/PANDA/pipeline/data/meshes/wooden_tray/mesh.obj",
+    "tape": "/home/yygx/PANDA/pipeline/data/meshes/tape/mesh.obj",
+    "holder_tree": "/home/yygx/PANDA/pipeline/data/meshes/holder_tree/mesh.obj",
     "_comment": "Paths to object mesh files for FoundationPose"
   },
 
   "yoloe_prompts": {
     "red_cup": "red plastic solo cup",
+    "white_cup": "white plastic cup",
     "plate": "blue and white plate",
     "basket": "white rectangular basket",
     "corn": "yellowcorn can",
@@ -70,6 +74,8 @@
     "cocoa": "brown cocoa powder container",
     "rubik_cube": "colorful rubik cube",
     "wooden_tray": "wooden serving tray",
+    "tape": "roll of tape",
+    "holder_tree": "wooden holder tree stand",
     "_comment": "YOLOE text prompts for each object"
   },
 
