@@ -107,14 +107,13 @@ class VLAClient:
             raise RuntimeError("VLA client not connected. Cannot predict actions.")
 
         # Prepare request data based on model type
+        # Both models use the same image inputs (exterior + wrist), only proprio differs
+        exterior_image = observations["left_image"]
+
         if self.model_type == "pi05":
             proprio_value = observations["joint_position"]
-            # Pi 0.5: exterior image can be zeros (wrist-only model) or actual image
-            # Based on evaluate_openpi.py, exterior is set to zeros for wrist-only
-            exterior_image = observations.get("left_image", np.zeros((224, 224, 3), dtype=np.uint8))
         else:  # openvla-oft
             proprio_value = observations["cartesian_position"]
-            exterior_image = observations["left_image"]
 
         # Resize images to 224x224
         if image_tools is not None:
