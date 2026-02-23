@@ -198,6 +198,87 @@ class YOLOEObjectDetectorClient:
 
         return union_mask if any_detection else None
 
+    def detect_with_bbox(
+        self,
+        image: np.ndarray,
+        object_name: str,
+        text_prompts: Dict[str, str] = None,
+        conf: float = 0.1
+    ) -> Optional[Dict]:
+        """
+        Detect a single object and return its bbox and mask.
+
+        Args:
+            image: RGB image (H, W, 3)
+            object_name: Object name to detect
+            text_prompts: Dict mapping object_name -> text_prompt (for text mode)
+            conf: Confidence threshold for YOLOE detection
+
+        Returns:
+            Dict with 'bbox' [x1, y1, x2, y2], 'mask' (H, W), 'confidence', or None if no detection
+        """
+        try:
+            if self.mode == "visual":
+                response = self.detect_visual(object_name, image, conf)
+            else:
+                # Text mode: need text prompt
+                if text_prompts and object_name in text_prompts:
+                    prompt = text_prompts[object_name]
+                else:
+                    prompt = object_name  # Fallback to object name
+                response = self.detect_text(prompt, image, conf)
+
+            if 'error' not in response and len(response.get('masks', [])) > 0:
+                # Return first (best) detection
+                mask_data = response['masks'][0]
+                bbox = response['bboxes'][0] if response.get('bboxes') else None
+                confidence = response['confidences'][0] if response.get('confidences') else 1.0
+                h, w = image.shape[:2]
+                mask = np.array(mask_data, dtype=np.uint8)
+                if mask.shape != (h, w):
+                    return None
+                return {
+                    'bbox': bbox,
+                    'mask': mask,
+                    'confidence': confidence,
+                    'object_name': object_name
+                }
+        except Exception as e:
+            print(f"[YOLOEClient] Detection failed for {object_name}: {e}")
+
+        return None
+
+    def detect_objects_with_bboxes(
+        self,
+        image: np.ndarray,
+        object_names: List[str],
+        text_prompts: Dict[str, str] = None,
+        conf: float = 0.1,
+        min_conf: float = 0.5
+    ) -> List[Dict]:
+        """
+        Detect multiple objects and return list of detections with bboxes.
+
+        Args:
+            image: RGB image (H, W, 3)
+            object_names: List of object names to detect
+            text_prompts: Dict mapping object_name -> text_prompt (for text mode)
+            conf: Confidence threshold for YOLOE detection
+            min_conf: Minimum confidence to include in results
+
+        Returns:
+            List of dicts, each with 'bbox', 'mask', 'confidence', 'object_name'
+        """
+        detections = []
+        for obj_name in object_names:
+            result = self.detect_with_bbox(image, obj_name, text_prompts, conf)
+            if result and result['confidence'] >= min_conf:
+                detections.append(result)
+                print(f"[YOLOEClient] {obj_name}: conf={result['confidence']:.3f}, bbox={result['bbox']}")
+            elif result:
+                print(f"[YOLOEClient] {obj_name}: conf={result['confidence']:.3f} (filtered out, < {min_conf})")
+        return detections
+
     def list_objects(self) -> Dict:
         """List all registered objects on server (visual mode only)."""
         self._ensure_connected()

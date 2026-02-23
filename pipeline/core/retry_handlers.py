@@ -108,9 +108,15 @@ def retry_pick_skill(
     # Step 3: MP to above pose (gripper open)
     print(f"\n3️⃣  Moving to above pose (gripper open)...")
     if motion_planner is not None:
-        mp_result = motion_planner.move_to_pose(above_pose, method="linear")
-        if not mp_result["success"]:
-            return {"success": False, "reason": f"Failed to reach above pose"}
+        mp_max_retries = robot_config["motion_planning"].get("max_retries", 3)
+        for mp_attempt in range(mp_max_retries):
+            mp_result = motion_planner.move_to_pose(above_pose, method="linear")
+            if mp_result["success"]:
+                break
+            if mp_attempt < mp_max_retries - 1:
+                print(f"⚠️  MP attempt {mp_attempt + 1}/{mp_max_retries} failed, retrying...")
+            else:
+                return {"success": False, "reason": f"Failed to reach above pose after {mp_max_retries} attempts"}
     print()
 
     # Step 4: VLA execute pick
@@ -129,14 +135,10 @@ def retry_pick_skill(
     # Step 5: Move EE up (gripper closed)
     print(f"5️⃣  Moving EE up (gripper closed)...")
     if motion_planner is not None:
-        # Get current pose and set gripper closed
-        current_pose = motion_planner.get_current_ee_pose()
-        lift_pose = {
-            "position": current_pose["position"] + np.array([0, 0, 0.05]),
-            "orientation_euler": current_pose["orientation_euler"],
-            "gripper": 1.0  # Keep gripper closed after pick
-        }
-        motion_planner.move_to_pose(lift_pose, method="linear")
+        lift_distance = robot_config["vla_execution"].get("post_skill_lift_distance", 0.1)
+        lift_success = motion_planner.move_ee_up(lift_distance=lift_distance, skill_type="pick")
+        if not lift_success:
+            print(f"⚠️  Lift did not fully converge, but continuing to success check...")
     print()
 
     # Step 6: Get final pose and check success
@@ -306,9 +308,15 @@ def retry_place_skill(
     # Step 4: MP to above pose (gripper closed)
     print(f"\n4️⃣  Moving to above pose (gripper closed, holding object)...")
     if motion_planner is not None:
-        mp_result = motion_planner.move_to_pose(above_pose, method="linear")
-        if not mp_result["success"]:
-            return {"success": False, "reason": f"Failed to reach above pose for place"}
+        mp_max_retries = robot_config["motion_planning"].get("max_retries", 3)
+        for mp_attempt in range(mp_max_retries):
+            mp_result = motion_planner.move_to_pose(above_pose, method="linear")
+            if mp_result["success"]:
+                break
+            if mp_attempt < mp_max_retries - 1:
+                print(f"⚠️  MP attempt {mp_attempt + 1}/{mp_max_retries} failed, retrying...")
+            else:
+                return {"success": False, "reason": f"Failed to reach above pose for place after {mp_max_retries} attempts"}
     print()
 
     # Step 5: VLA execute place
@@ -327,13 +335,10 @@ def retry_place_skill(
     # Step 6: Move EE up (gripper open)
     print(f"6️⃣  Moving EE up (gripper open)...")
     if motion_planner is not None:
-        current_pose = motion_planner.get_current_ee_pose()
-        lift_pose = {
-            "position": current_pose["position"] + np.array([0, 0, 0.05]),
-            "orientation_euler": current_pose["orientation_euler"],
-            "gripper": 0.0  # Open gripper after place
-        }
-        motion_planner.move_to_pose(lift_pose, method="linear")
+        lift_distance = robot_config["vla_execution"].get("post_skill_lift_distance", 0.1)
+        lift_success = motion_planner.move_ee_up(lift_distance=lift_distance, skill_type="place")
+        if not lift_success:
+            print(f"⚠️  Lift did not fully converge, but continuing to success check...")
     print()
 
     # Step 7: Get final poses and check success

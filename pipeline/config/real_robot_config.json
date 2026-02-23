@@ -5,7 +5,7 @@
   "_vla_model_options": ["pi05", "openvla-oft"],
   "_vla_model_comment": "pi05 uses joint_position (7D) and joint_velocity actions (8D). openvla-oft uses cartesian_position (6D) and cartesian_velocity actions (7D).",
 
-  "is_randome_erasing": true,
+  "is_randome_erasing": false,
   "is_relative_pose": true,
   "is_visual_ref_yoloe": true,
 
@@ -16,6 +16,21 @@
   },
 
   "yoloe_visual_ref_dir": "data/yoloe_ref_images/yoloe_ref_images_3rd_view",
+
+  "yoloe_detection": {
+    "registration": {
+      "conf_threshold": 0.01,
+      "right_mask_ratio": 0.2,
+      "_comment": "Low threshold for 3rd person view object detection during registration. right_mask_ratio: mask right portion of frame (0.2 = mask right 1/5)"
+    },
+    "random_erasing": {
+      "conf_threshold": 0.5,
+      "min_conf": 0.5,
+      "max_mask_area_ratio": 0.25,
+      "target_unmask_conf": 0.01,
+      "_comment": "High threshold for wrist view distractor masking. max_mask_area_ratio: skip masking if mask covers more than this fraction of image. target_unmask_conf: low threshold for detecting target object to unmask"
+    }
+  },
 
   "cameras": {
     "left_camera_id": "36087771",
@@ -58,6 +73,8 @@
     "wooden_tray": "/home/yygx/PANDA/pipeline/data/meshes/wooden_tray/mesh.obj",
     "tape": "/home/yygx/PANDA/pipeline/data/meshes/tape/mesh.obj",
     "holder_tree": "/home/yygx/PANDA/pipeline/data/meshes/holder_tree/mesh.obj",
+    "bowl": "/home/yygx/PANDA/pipeline/data/meshes/bowl/mesh.obj",
+    "corn_can": "/home/yygx/PANDA/pipeline/data/meshes/corn_can/mesh.obj",
     "_comment": "Paths to object mesh files for FoundationPose"
   },
 
@@ -76,6 +93,8 @@
     "wooden_tray": "wooden serving tray",
     "tape": "roll of tape",
     "holder_tree": "wooden holder tree stand",
+    "bowl": "white ceramic bowl",
+    "corn_can": "yellow corn can",
     "_comment": "YOLOE text prompts for each object"
   },
 
@@ -83,13 +102,12 @@
     "save_debug": true,
     "debug_dir": "/home/yygx/PANDA/pipeline/data/registration",
     "registration_iteration": 3,
-    "registration_conf": 0.05,
     "_comment": "Registration settings and debug save directory"
   },
 
   "vla_server": {
     "host": "localhost",
-    "port": 8009,
+    "port": 8000, 
     "_comment": "Point to the IP address of the VLA policy server (e.g., GPU server)"
   },
 
@@ -109,13 +127,19 @@
   },
 
   "vla_execution": {
-    "max_timesteps": 200,
+    "max_timesteps": 70,
     "open_loop_horizon": 8,
     "gripper_threshold": 0.5,
-    "_comment": "gripper > 0.5 means open (0), gripper <= 0.5 means close (1)"
+    "max_retries": 5,
+    "post_skill_lift_distance": 0.2,
+    "_comment": "gripper > 0.5 means open (0), gripper <= 0.5 means close (1). max_retries: skill-level retry attempts. post_skill_lift_distance: meters to lift EE after skill"
   },
 
   "success_checking": {
+    "user_decide_mode": true,
+    "user_decide_start_step": 20,
+    "user_decide_interval": 10,
+    "_user_decide_mode_comment": "If true, ask user y/n for success every user_decide_interval steps, starting from user_decide_start_step",
     "object_lifted": {
       "min_height_increase": 0.03,
       "_comment": "For pick skills: object Z increases by >= 3cm"
@@ -126,7 +150,7 @@
       "_comment": "For place-on skills: XY < 5cm, Z < mesh_half_edge + 2cm"
     },
     "object_in_target": {
-      "xy_distance_threshold": 0.05,
+      "xy_distance_threshold": 0.1,
       "z_distance_threshold": 0.05,
       "_comment": "For place-in skills: XY < 5cm, Z < 5cm (fixed threshold)"
     },
@@ -143,7 +167,7 @@
     "save_video": true,
     "video_fps": 20,
     "save_csv": true,
-    "save_dir": "scripts/phase4_real_robot/local_scripts/pipeline/outputs"
+    "save_dir": "outputs"
   },
 
   "full_pipeline_video": {

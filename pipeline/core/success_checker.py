@@ -32,6 +32,7 @@ class SuccessChecker:
 
         Args:
             config: Success checking config with:
+                - user_decide_mode: bool (if True, skip automatic checks and ask user y/n)
                 - object_lifted:
                     - min_height_increase: float (meters, default 0.03)
                 - object_on_target:
@@ -47,6 +48,11 @@ class SuccessChecker:
                     - stability_window: int (timesteps, default 10)
         """
         self.config = config
+
+        # User decide mode - skip automatic checks and ask user
+        self.user_decide_mode = config.get("user_decide_mode", False)
+        if self.user_decide_mode:
+            print(f"   ⚠️  USER DECIDE MODE ENABLED - will ask user for success confirmation")
 
         # object_lifted parameters
         lifted_config = config.get("object_lifted", {})
@@ -91,6 +97,33 @@ class SuccessChecker:
         elif object_name in self._position_history:
             del self._position_history[object_name]
 
+    def _check_user_decide(self, skill_info: Dict, success_check_type: str) -> Dict:
+        """Ask user to decide if skill succeeded."""
+        language = skill_info.get("language", "unknown skill")
+        target = skill_info.get("target_object", "unknown")
+
+        print(f"\n{'='*60}")
+        print(f"⚠️  USER SUCCESS CHECK")
+        print(f"{'='*60}")
+        print(f"Skill: {language}")
+        print(f"Target object: {target}")
+        print(f"Check type: {success_check_type}")
+        print(f"{'='*60}")
+
+        while True:
+            user_input = input("Did the skill succeed? (y/n): ").strip().lower()
+            if user_input in ['y', 'n']:
+                break
+            print("Please enter 'y' or 'n'")
+
+        success = user_input == 'y'
+        return {
+            "success": success,
+            "confidence": 1.0,
+            "reason": f"User decided: {'SUCCESS' if success else 'FAILURE'}",
+            "metrics": {"user_decide_mode": True}
+        }
+
     def check_success(
         self,
         success_check_type: str,
@@ -116,6 +149,10 @@ class SuccessChecker:
                 - reason: str (explanation)
                 - metrics: dict (measurements)
         """
+        # In user_decide_mode, skip automatic checks and ask user
+        if self.user_decide_mode:
+            return self._check_user_decide(skill_info, success_check_type)
+
         if success_check_type == "object_lifted":
             return self._check_object_lifted(skill_info, initial_states, current_states)
         elif success_check_type == "object_on_target":
@@ -159,9 +196,15 @@ class SuccessChecker:
                 "metrics": {}
             }
 
-        initial_z = initial_states[target_object]["position"][2]
-        current_z = current_states[target_object]["position"][2]
+        initial_pos = initial_states[target_object]["position"]
+        current_pos = current_states[target_object]["position"]
+        initial_z = initial_pos[2]
+        current_z = current_pos[2]
         height_increase = current_z - initial_z
+
+        # Debug: print object poses
+        print(f"   [DEBUG] {target_object} initial pos: [{initial_pos[0]:.4f}, {initial_pos[1]:.4f}, {initial_pos[2]:.4f}]")
+        print(f"   [DEBUG] {target_object} current pos: [{current_pos[0]:.4f}, {current_pos[1]:.4f}, {current_pos[2]:.4f}]")
 
         success = height_increase >= self.min_height_increase
 
@@ -219,6 +262,10 @@ class SuccessChecker:
 
         target_pos = np.array(current_states[target_object]["position"])
         grasp_pos = np.array(current_states[grasp_object]["position"])
+
+        # Debug: print object poses
+        print(f"   [DEBUG] {target_object} (target) pos: [{target_pos[0]:.4f}, {target_pos[1]:.4f}, {target_pos[2]:.4f}]")
+        print(f"   [DEBUG] {grasp_object} (grasp) pos: [{grasp_pos[0]:.4f}, {grasp_pos[1]:.4f}, {grasp_pos[2]:.4f}]")
 
         # Check 1: XY distance
         xy_distance = np.linalg.norm(target_pos[:2] - grasp_pos[:2])
@@ -301,6 +348,10 @@ class SuccessChecker:
 
         target_pos = np.array(current_states[target_object]["position"])
         grasp_pos = np.array(current_states[grasp_object]["position"])
+
+        # Debug: print object poses
+        print(f"   [DEBUG] {target_object} (target) pos: [{target_pos[0]:.4f}, {target_pos[1]:.4f}, {target_pos[2]:.4f}]")
+        print(f"   [DEBUG] {grasp_object} (grasp) pos: [{grasp_pos[0]:.4f}, {grasp_pos[1]:.4f}, {grasp_pos[2]:.4f}]")
 
         # Check 1: XY distance
         xy_distance = np.linalg.norm(target_pos[:2] - grasp_pos[:2])

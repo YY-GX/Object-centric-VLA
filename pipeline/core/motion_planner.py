@@ -306,7 +306,7 @@ class MotionPlanner:
         skill_type: str = "pick"
     ) -> bool:
         """
-        Lift EE vertically by specified distance.
+        Lift EE vertically by specified distance with retry logic.
 
         Used after pick/place skills to clear the object.
 
@@ -319,29 +319,47 @@ class MotionPlanner:
         """
         print(f"⬆️  Lifting EE by {lift_distance}m (after {skill_type})...")
 
-        # Get current pose
-        current_pose = self.get_current_ee_pose()
-        current_pos = current_pose["position"]
+        # Set gripper based on skill type (motion planner convention: 0=open, 1=closed)
+        # pick: close gripper to hold object, then lift
+        # place: open gripper to release object, then lift
+        target_gripper = 1.0 if skill_type == "pick" else 0.0
 
-        # Calculate target: same XY, higher Z
-        target_pos = current_pos.copy()
+        # Step 1: Send gripper-only action for 5 timesteps before lifting
+        gripper_action_name = "Closing" if skill_type == "pick" else "Opening"
+        print(f"   {gripper_action_name} gripper for 5 timesteps...")
+        for _ in range(5):
+            # Zero velocity action with gripper command: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+            action = np.array([0, 0, 0, 0, 0, 0, target_gripper])
+            self.robot_env.update_robot(action, action_space="cartesian_velocity", gripper_action_space="position")
+
+        # Step 2: Calculate lift target based on current position (after gripper action)
+        initial_pose = self.get_current_ee_pose()
+        initial_pos = initial_pose["position"]
+
+        target_pos = initial_pos.copy()
         target_pos[2] += lift_distance
 
         target_pose = {
             "position": target_pos,
-            "orientation_euler": current_pose["orientation_euler"],
-            "gripper": current_pose["gripper"]
+            "orientation_euler": initial_pose["orientation_euler"],
+            "gripper": target_gripper
         }
 
-        # Execute lift
-        result = self.move_to_pose(target_pose)
+        # Step 3: Execute lift with retries
+        for attempt in range(self.max_retries):
+            # Execute lift to the SAME target each attempt
+            result = self.move_to_pose(target_pose)
 
-        if result["success"]:
-            print(f"✅ Lifted EE successfully")
-        else:
-            print(f"⚠️  Lift incomplete (distance: {result['final_distance']:.4f}m)")
+            if result["success"]:
+                print(f"✅ Lifted EE successfully")
+                return True
+            else:
+                if attempt < self.max_retries - 1:
+                    print(f"⚠️  Lift attempt {attempt + 1}/{self.max_retries} failed (distance: {result['final_distance']:.4f}m), retrying...")
+                else:
+                    print(f"⚠️  Lift failed after {self.max_retries} attempts (distance: {result['final_distance']:.4f}m)")
 
-        return result["success"]
+        return False
 
     def get_current_ee_pose(self) -> Dict:
         """

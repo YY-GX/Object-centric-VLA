@@ -21,31 +21,57 @@ from .distractor_masking import apply_distractor_rectangle_masking
 # DROID data collection frequency
 DROID_CONTROL_FREQUENCY = 15
 
-# Hardcoded save directory
-VLA_OUTPUT_DIR = "/home/yygx/PANDA/pipeline/outputs"
 
-
-def _save_rollout_data(
-    save_dir: str,
-    left_images: List[np.ndarray],
-    wrist_images: List[np.ndarray],
-    states: List[Dict],
-    actions: List[Dict],
-    model_type: str = "pi05"
-) -> None:
+def _bboxes_overlap(bbox1: list, bbox2: list, iou_threshold: float = 0.3) -> bool:
     """
-    Save rollout data to disk.
+    Check if two bboxes overlap with IoU above threshold.
 
     Args:
-        save_dir: Directory to save data
-        left_images: List of left camera images (RGB)
-        wrist_images: List of wrist camera images (RGB)
-        states: List of state dicts with t, cartesian_position, gripper_position
-        actions: List of action dicts with t, action
-        model_type: VLA model type for proper action CSV headers
+        bbox1: [x1, y1, x2, y2]
+        bbox2: [x1, y1, x2, y2]
+        iou_threshold: Minimum IoU to consider as overlap
+
+    Returns:
+        True if bboxes overlap with IoU >= threshold
     """
-    if not left_images:
-        print("   Warning: No rollout data to save")
+    # Get intersection coordinates
+    x1 = max(bbox1[0], bbox2[0])
+    y1 = max(bbox1[1], bbox2[1])
+    x2 = min(bbox1[2], bbox2[2])
+    y2 = min(bbox1[3], bbox2[3])
+
+    # Check if there's no intersection
+    if x2 <= x1 or y2 <= y1:
+        return False
+
+    # Compute intersection area
+    intersection = (x2 - x1) * (y2 - y1)
+
+    # Compute areas
+    area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+    area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+
+    # Compute IoU
+    union = area1 + area2 - intersection
+    iou = intersection / union if union > 0 else 0
+
+    return iou >= iou_threshold
+
+def _save_masked_wrist_video(
+    save_dir: str,
+    skill_name: str,
+    wrist_images: List[np.ndarray]
+) -> None:
+    """
+    Save masked wrist camera video for a skill.
+
+    Args:
+        save_dir: Directory to save video
+        skill_name: Skill name for filename
+        wrist_images: List of wrist camera images (RGB) with random erasing applied
+    """
+    if not wrist_images:
+        print("   Warning: No wrist images to save")
         return
 
     try:
@@ -54,72 +80,16 @@ def _save_rollout_data(
         print("   Warning: moviepy not installed, skipping video saving")
         return
 
-    print(f"   Saving rollout data ({len(left_images)} frames)...")
+    # Clean skill name for filename
+    clean_name = skill_name.replace(" ", "_").replace(".", "")
+    video_path = os.path.join(save_dir, f"skill_{clean_name}_masked_wrist.mp4")
 
-    # Save left_video.mp4
     try:
-        left_video_path = os.path.join(save_dir, "left_video.mp4")
-        left_clip = ImageSequenceClip(list(left_images), fps=10)
-        left_clip.write_videofile(left_video_path, codec="libx264", verbose=False, logger=None)
-        print(f"      Saved left_video.mp4")
+        clip = ImageSequenceClip(list(wrist_images), fps=10)
+        clip.write_videofile(video_path, codec="libx264", verbose=False, logger=None)
+        print(f"   Saved masked wrist video: {video_path}")
     except Exception as e:
-        print(f"      Failed to save left_video.mp4: {e}")
-
-    # Save wrist_video.mp4
-    try:
-        wrist_video_path = os.path.join(save_dir, "wrist_video.mp4")
-        wrist_clip = ImageSequenceClip(list(wrist_images), fps=10)
-        wrist_clip.write_videofile(wrist_video_path, codec="libx264", verbose=False, logger=None)
-        print(f"      Saved wrist_video.mp4")
-    except Exception as e:
-        print(f"      Failed to save wrist_video.mp4: {e}")
-
-    # Save state.csv
-    try:
-        state_path = os.path.join(save_dir, "state.csv")
-        with open(state_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["t", "x", "y", "z", "roll", "pitch", "yaw", "gripper"])
-            for s in states:
-                cart = s["cartesian_position"]
-                writer.writerow([
-                    s["t"],
-                    cart[0], cart[1], cart[2],
-                    cart[3], cart[4], cart[5],
-                    s["gripper_position"]
-                ])
-        print(f"      Saved state.csv")
-    except Exception as e:
-        print(f"      Failed to save state.csv: {e}")
-
-    # Save action.csv (format depends on model type)
-    try:
-        action_path = os.path.join(save_dir, "action.csv")
-        with open(action_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            if model_type == "pi05":
-                # 8D action: 7 joint velocities + gripper
-                writer.writerow(["t", "j1", "j2", "j3", "j4", "j5", "j6", "j7", "gripper"])
-                for a in actions:
-                    act = a["action"]
-                    writer.writerow([
-                        a["t"],
-                        act[0], act[1], act[2], act[3], act[4], act[5], act[6], act[7]
-                    ])
-            else:
-                # 7D action: 6 cartesian deltas + gripper
-                writer.writerow(["t", "dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper"])
-                for a in actions:
-                    act = a["action"]
-                    writer.writerow([
-                        a["t"],
-                        act[0], act[1], act[2], act[3], act[4], act[5], act[6]
-                    ])
-        print(f"      Saved action.csv")
-    except Exception as e:
-        print(f"      Failed to save action.csv: {e}")
-
-    print(f"   Rollout data saved to: {save_dir}")
+        print(f"   Failed to save masked wrist video: {e}")
 
 
 def execute_vla_skill(
@@ -137,7 +107,8 @@ def execute_vla_skill(
     csv_logger: Optional[Any] = None,
     get_tracked_objects_func=None,
     get_distractor_objects_func=None,
-    save_rollout: bool = True
+    output_dir: Optional[str] = None,
+    save_masked_video: bool = True
 ) -> Dict:
     """
     Execute VLA skill with continuous object tracking and success checking.
@@ -159,7 +130,8 @@ def execute_vla_skill(
         csv_logger: CSV logger instance (optional)
         get_tracked_objects_func: Function to get objects to track for skill
         get_distractor_objects_func: Function to get distractor objects for skill
-        save_rollout: Whether to save rollout videos and CSVs (default True)
+        output_dir: Directory to save masked wrist video (optional)
+        save_masked_video: Whether to save per-skill masked wrist video (default True)
 
     Returns:
         Dict with "success" and "reason"
@@ -185,18 +157,9 @@ def execute_vla_skill(
     actions_from_chunk_completed = 0
     pred_action_chunk = None
 
-    # Data collection for rollout saving
-    rollout_left_images = []
+    # Data collection for masked wrist video saving
     rollout_wrist_images = []
-    rollout_states = []
-    rollout_actions = []
-    rollout_save_dir = None
-    if save_rollout:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        skill_name = skill_info.get("language", "skill").replace(" ", "_").replace(".", "")
-        rollout_save_dir = os.path.join(VLA_OUTPUT_DIR, f"{skill_name}_{timestamp}")
-        os.makedirs(rollout_save_dir, exist_ok=True)
-        print(f"   Rollout will be saved to: {rollout_save_dir}")
+    skill_name = skill_info.get("language", "skill")
 
     # Relative pose state tracking (for is_relative_pose) - only for openvla-oft
     is_relative_pose = robot_config.get("is_relative_pose", False) and model_type == "openvla-oft"
@@ -212,192 +175,257 @@ def execute_vla_skill(
     stage1_ended = False
     stage1_end_cart_pos = None
 
-    for t_step in range(max_timesteps):
-        print(f"   Step {t_step} of {max_timesteps}")
+    try:
+        for t_step in range(max_timesteps):
+            print(f"   Step {t_step} of {max_timesteps}")
 
-        # Start timing at the beginning of loop iteration
-        start_time_step = time.time()
+            # Start timing at the beginning of loop iteration
+            start_time_step = time.time()
 
-        # Get current observation
-        obs = robot_env.get_observation()
+            # Get current observation
+            obs = robot_env.get_observation()
 
-        # Camera returns BGRA, convert to RGB for FoundationPose
-        bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
-        rgb_image = bgra_image[..., :3][..., ::-1]  # Strip alpha, then BGR to RGB
+            # Camera returns BGRA, convert to RGB for FoundationPose
+            bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
+            rgb_image = bgra_image[..., :3][..., ::-1]  # Strip alpha, then BGR to RGB
 
-        # Track all objects and check for success
-        current_states = {}
-        for obj_name in objects_to_track:
-            pose_result = pose_client.get_pose(
-                object_name=obj_name,
-                rgb=rgb_image,
-                depth=get_camera_data(obs, 'left', robot_config, 'depth'),
-                K=K,
-                iteration=robot_config["tracking"]["tracking_iteration"]
-            )
-            if pose_result and pose_result["success"]:
-                pose_cam = np.array(pose_result["pose"])
-                pose_matrix = transform_pose_camera_to_base(pose_cam, 'left', robot_config)
-                current_states[obj_name] = {
-                    "position": pose_matrix[:3, 3],
-                    "pose_matrix": pose_matrix
-                }
-
-        # Check skill success
-        if len(current_states) == len(objects_to_track):
-            success_result = success_checker.check_success(
-                success_check_type=success_check_type,
-                skill_info=skill_info,
-                initial_states=initial_states,
-                current_states=current_states,
-                mesh_paths=mesh_paths
-            )
-
-            if success_result["success"]:
-                print(f"   Success detected at step {t_step}: {success_result['reason']}")
-                # Save rollout data before returning
-                if save_rollout and rollout_save_dir:
-                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
-                return {"success": True, "reason": f"Success at step {t_step}"}
-
-        # Detect distractor objects for random erasing (if enabled)
-        masked_wrist_image = None
-        if yoloe_client is not None and get_distractor_objects_func is not None:
-            distractors = get_distractor_objects_func(skill_info)
-            if distractors:
-                wrist_image = get_camera_data(obs, 'wrist', robot_config, 'image')
-                # Convert BGRA to RGB for YOLOE (strip alpha first, then reverse BGR to RGB)
-                wrist_image_rgb = wrist_image[..., :3][..., ::-1] if wrist_image is not None else None
-                if wrist_image_rgb is not None:
-                    distractor_mask = yoloe_client.detect_and_union(
-                        wrist_image_rgb,
-                        distractors,
-                        text_prompts=yoloe_text_prompts,
-                        conf=0.1
-                    )
-                    # Apply rectangle masking to distractor regions
-                    if distractor_mask is not None and distractor_mask.sum() > 0:
-                        masked_wrist_image = apply_distractor_rectangle_masking(
-                            wrist_image_rgb,
-                            distractor_mask,
-                            max_rectangles=5
-                        )
-                        print(f"   Applied distractor masking ({distractor_mask.sum()} pixels detected)")
-
-        # Stage detection for pick skills (detect stage 1 end by looking at past gripper values)
-        # Only for openvla-oft with relative pose
-        if is_relative_pose:
-            current_gripper = obs["robot_state"]["gripper_position"]
-            gripper_history.append(current_gripper)
-
-            if is_pick_skill and not stage1_ended and len(gripper_history) >= 4:
-                # Check if gripper closed and stable for past 3 steps
-                g = gripper_history
-                gripper_stable_threshold = 1e-4
-                # Gripper closed (current value high) and stable
-                if (g[-1] > 0.5 and  # Gripper closed
-                    abs(g[-1] - g[-2]) < gripper_stable_threshold and
-                    abs(g[-2] - g[-3]) < gripper_stable_threshold and
-                    abs(g[-3] - g[-4]) < gripper_stable_threshold):
-                    stage1_ended = True
-                    # Compute and store the relative pose at this moment
-                    ee_pos = np.array(obs["robot_state"]["cartesian_position"])
-                    if object_pos is not None:
-                        rel_pos = ee_pos[:3] - object_pos
-                        stage1_end_cart_pos = np.concatenate([rel_pos, ee_pos[3:]])
-                        print(f"   Stage 1 ended at step {t_step}, freezing relative pose")
-
-        # Prepare observation for VLA
-        vla_obs = prepare_vla_observation(
-            obs,
-            robot_config,
-            model_type=model_type,
-            object_pos=object_pos,
-            is_pick_skill=is_pick_skill,
-            stage1_ended=stage1_ended,
-            stage1_end_cart_pos=stage1_end_cart_pos,
-            masked_wrist_image=masked_wrist_image
-        )
-
-        # Collect data for rollout saving
-        if save_rollout:
-            rollout_left_images.append(vla_obs["left_image"].copy())
-            rollout_wrist_images.append(vla_obs["wrist_image"].copy())
-            rollout_states.append({
-                "t": t_step,
-                "cartesian_position": np.array(obs["robot_state"]["cartesian_position"]).copy(),
-                "gripper_position": float(vla_obs["gripper_position"][0])
-            })
-
-        # Query VLA server for new action chunk
-        if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= open_loop_horizon:
-            actions_from_chunk_completed = 0
-
-            try:
-                pred_action_chunk = vla_client.predict(
-                    vla_obs, language, open_loop_horizon
+            # Track all objects and check for success
+            current_states = {}
+            for obj_name in objects_to_track:
+                pose_result = pose_client.get_pose(
+                    object_name=obj_name,
+                    rgb=rgb_image,
+                    depth=get_camera_data(obs, 'left', robot_config, 'depth'),
+                    K=K,
+                    iteration=robot_config["tracking"]["tracking_iteration"]
                 )
+                if pose_result and pose_result["success"]:
+                    pose_cam = np.array(pose_result["pose"])
+                    pose_matrix = transform_pose_camera_to_base(pose_cam, 'left', robot_config)
+                    current_states[obj_name] = {
+                        "position": pose_matrix[:3, 3],
+                        "pose_matrix": pose_matrix
+                    }
+
+            # Check skill success
+            # Auto mode: check every step
+            # User decide mode: check every N steps starting from step M
+            should_check = False
+            if len(current_states) == len(objects_to_track):
+                if not success_checker.user_decide_mode:
+                    # Auto mode: check every step
+                    should_check = True
+                else:
+                    # User decide mode: check every interval steps starting from start_step
+                    success_config = robot_config.get("success_checking", {})
+                    start_step = success_config.get("user_decide_start_step", 30)
+                    interval = success_config.get("user_decide_interval", 10)
+                    if t_step >= start_step and (t_step - start_step) % interval == 0:
+                        should_check = True
+
+            if should_check:
+                success_result = success_checker.check_success(
+                    success_check_type=success_check_type,
+                    skill_info=skill_info,
+                    initial_states=initial_states,
+                    current_states=current_states,
+                    mesh_paths=mesh_paths
+                )
+
+                if success_result["success"]:
+                    print(f"   Success detected at step {t_step}: {success_result['reason']}")
+                    # Save masked wrist video before returning
+                    if save_masked_video and output_dir:
+                        _save_masked_wrist_video(output_dir, skill_name, rollout_wrist_images)
+                    return {"success": True, "reason": f"Success at step {t_step}"}
+
+            # Detect distractor objects for random erasing (if enabled)
+            masked_wrist_image = None
+            if yoloe_client is not None and get_distractor_objects_func is not None:
+                distractors = get_distractor_objects_func(skill_info)
+                if distractors:
+                    wrist_image = get_camera_data(obs, 'wrist', robot_config, 'image')
+                    # Convert BGRA to RGB for YOLOE (strip alpha first, then reverse BGR to RGB)
+                    wrist_image_rgb = wrist_image[..., :3][..., ::-1] if wrist_image is not None else None
+                    if wrist_image_rgb is not None:
+                        yoloe_re_config = robot_config.get("yoloe_detection", {}).get("random_erasing", {})
+                        yoloe_conf = yoloe_re_config.get("conf_threshold", 0.5)
+                        yoloe_min_conf = yoloe_re_config.get("min_conf", 0.5)
+                        target_unmask_conf = yoloe_re_config.get("target_unmask_conf", 0.01)
+                        print(f"   [DEBUG] YOLOE conf={yoloe_conf}, min_conf={yoloe_min_conf}")
+
+                        # Step 1: Detect target object bbox first (to exclude overlapping distractors)
+                        target_object = skill_info.get("target_object")
+                        target_bbox = None
+                        if target_object:
+                            target_result = yoloe_client.detect_with_bbox(
+                                wrist_image_rgb,
+                                target_object,
+                                text_prompts=yoloe_text_prompts,
+                                conf=target_unmask_conf
+                            )
+                            if target_result:
+                                # Enlarge target bbox by 1.2x for safety margin
+                                bbox = target_result['bbox']
+                                if bbox:
+                                    x1, y1, x2, y2 = bbox
+                                    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                                    w, h = (x2 - x1) * 1.2, (y2 - y1) * 1.2
+                                    target_bbox = [cx - w/2, cy - h/2, cx + w/2, cy + h/2]
+                                    print(f"   Target bbox ({target_object}): {[int(v) for v in target_bbox]}")
+
+                        # Step 2: Detect all distractor objects with their bboxes
+                        distractor_detections = yoloe_client.detect_objects_with_bboxes(
+                            wrist_image_rgb,
+                            distractors,
+                            text_prompts=yoloe_text_prompts,
+                            conf=yoloe_conf,
+                            min_conf=yoloe_min_conf
+                        )
+
+                        # Step 3: Filter out distractor bboxes that overlap with target bbox
+                        filtered_detections = []
+                        for det in distractor_detections:
+                            if target_bbox is not None and det['bbox'] is not None:
+                                # Check IoU overlap
+                                if _bboxes_overlap(det['bbox'], target_bbox, iou_threshold=0.1):
+                                    print(f"   Excluded distractor '{det['object_name']}' (overlaps with target)")
+                                    continue
+                            filtered_detections.append(det)
+
+                        # Step 4: Create union mask from remaining distractor detections
+                        if filtered_detections:
+                            h, w = wrist_image_rgb.shape[:2]
+                            distractor_mask = np.zeros((h, w), dtype=np.uint8)
+                            for det in filtered_detections:
+                                distractor_mask = np.maximum(distractor_mask, det['mask'])
+                                print(f"   Including distractor '{det['object_name']}' in mask")
+
+                            # Step 5: Apply rectangle masking only if mask exists
+                            if distractor_mask.sum() > 0:
+                                # Check if mask area exceeds max allowed ratio
+                                max_mask_area_ratio = yoloe_re_config.get("max_mask_area_ratio", 0.25)
+                                total_pixels = distractor_mask.shape[0] * distractor_mask.shape[1]
+                                mask_area_ratio = distractor_mask.sum() / total_pixels
+
+                                if mask_area_ratio > max_mask_area_ratio:
+                                    print(f"   Skipping distractor masking: mask area {mask_area_ratio:.2%} > max {max_mask_area_ratio:.0%}")
+                                else:
+                                    masked_wrist_image = apply_distractor_rectangle_masking(
+                                        wrist_image_rgb,
+                                        distractor_mask,
+                                        max_rectangles=5
+                                    )
+                                    print(f"   Applied distractor masking ({distractor_mask.sum()} pixels, {mask_area_ratio:.2%} of image)")
+
+            # Stage detection for pick skills (detect stage 1 end by looking at past gripper values)
+            # Only for openvla-oft with relative pose
+            if is_relative_pose:
+                current_gripper = obs["robot_state"]["gripper_position"]
+                gripper_history.append(current_gripper)
+
+                if is_pick_skill and not stage1_ended and len(gripper_history) >= 4:
+                    # Check if gripper closed and stable for past 3 steps
+                    g = gripper_history
+                    gripper_stable_threshold = 1e-4
+                    # Gripper closed (current value high) and stable
+                    if (g[-1] > 0.5 and  # Gripper closed
+                        abs(g[-1] - g[-2]) < gripper_stable_threshold and
+                        abs(g[-2] - g[-3]) < gripper_stable_threshold and
+                        abs(g[-3] - g[-4]) < gripper_stable_threshold):
+                        stage1_ended = True
+                        # Compute and store the relative pose at this moment
+                        ee_pos = np.array(obs["robot_state"]["cartesian_position"])
+                        if object_pos is not None:
+                            rel_pos = ee_pos[:3] - object_pos
+                            stage1_end_cart_pos = np.concatenate([rel_pos, ee_pos[3:]])
+                            print(f"   Stage 1 ended at step {t_step}, freezing relative pose")
+
+            # Prepare observation for VLA
+            vla_obs = prepare_vla_observation(
+                obs,
+                robot_config,
+                model_type=model_type,
+                object_pos=object_pos,
+                is_pick_skill=is_pick_skill,
+                stage1_ended=stage1_ended,
+                stage1_end_cart_pos=stage1_end_cart_pos,
+                masked_wrist_image=masked_wrist_image
+            )
+
+            # Collect masked wrist image for video saving
+            if save_masked_video and output_dir:
+                rollout_wrist_images.append(vla_obs["wrist_image"].copy())
+
+            # Query VLA server for new action chunk
+            if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= open_loop_horizon:
+                actions_from_chunk_completed = 0
+
+                try:
+                    pred_action_chunk = vla_client.predict(
+                        vla_obs, language, open_loop_horizon
+                    )
+                except Exception as e:
+                    print(f"   VLA prediction failed: {e}")
+                    # Save masked wrist video before returning
+                    if save_masked_video and output_dir:
+                        _save_masked_wrist_video(output_dir, skill_name, rollout_wrist_images)
+                    return {"success": False, "reason": f"VLA prediction error: {e}"}
+
+            # Select action from chunk
+            action = pred_action_chunk[actions_from_chunk_completed]
+            actions_from_chunk_completed += 1
+
+            # Binarize gripper action based on model type
+            # Pi 0.5: action[7] is gripper, >0.5 means open (1), <=0.5 means close (0)
+            # OpenVLA-OFT: action[6] is gripper, >0.5 means open (0), <=0.5 means close (1)
+            if model_type == "pi05":
+                # Pi 0.5: 8D action [j1..j7, gripper]
+                # Gripper logic: >0.5 means open (1), <=0.5 means close (0)
+                if action[7] > gripper_threshold:
+                    action = np.concatenate([action[:7], np.ones((1,))])   # Open
+                else:
+                    action = np.concatenate([action[:7], np.zeros((1,))])  # Close
+            else:
+                # OpenVLA-OFT: 7D action [dx..dyaw, gripper]
+                # Gripper logic: >0.5 means open (0), <=0.5 means close (1)
+                if action[6] > gripper_threshold:
+                    action = np.concatenate([action[:6], np.zeros((1,))])  # Open
+                else:
+                    action = np.concatenate([action[:6], np.ones((1,))])   # Close
+
+            # Clip action to safe range
+            action = np.clip(action, -1, 1)
+
+            # Log actions and state
+            if csv_logger is not None:
+                csv_logger.log_step(t_step, action, obs["robot_state"])
+
+            # Execute action
+            try:
+                robot_env.step(action)
             except Exception as e:
-                print(f"   VLA prediction failed: {e}")
-                # Save rollout data before returning
-                if save_rollout and rollout_save_dir:
-                    _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
-                return {"success": False, "reason": f"VLA prediction error: {e}"}
+                print(f"   Robot step failed: {e}")
+                # Save masked wrist video before returning
+                if save_masked_video and output_dir:
+                    _save_masked_wrist_video(output_dir, skill_name, rollout_wrist_images)
+                return {"success": False, "reason": f"Robot step error: {e}"}
 
-        # Select action from chunk
-        action = pred_action_chunk[actions_from_chunk_completed]
-        actions_from_chunk_completed += 1
+            # Sleep to match DROID control frequency
+            elapsed_time = time.time() - start_time_step
+            if elapsed_time < 1 / DROID_CONTROL_FREQUENCY:
+                time.sleep(1 / DROID_CONTROL_FREQUENCY - elapsed_time)
 
-        # Binarize gripper action based on model type
-        # Pi 0.5: action[7] is gripper, >0.5 means open (1), <=0.5 means close (0)
-        # OpenVLA-OFT: action[6] is gripper, >0.5 means open (0), <=0.5 means close (1)
-        if model_type == "pi05":
-            # Pi 0.5: 8D action [j1..j7, gripper]
-            # Gripper logic: >0.5 means open (1), <=0.5 means close (0)
-            if action[7] > gripper_threshold:
-                action = np.concatenate([action[:7], np.ones((1,))])   # Open
-            else:
-                action = np.concatenate([action[:7], np.zeros((1,))])  # Close
-        else:
-            # OpenVLA-OFT: 7D action [dx..dyaw, gripper]
-            # Gripper logic: >0.5 means open (0), <=0.5 means close (1)
-            if action[6] > gripper_threshold:
-                action = np.concatenate([action[:6], np.zeros((1,))])  # Open
-            else:
-                action = np.concatenate([action[:6], np.ones((1,))])   # Close
+    except KeyboardInterrupt:
+        print(f"\n   ⚠️  VLA execution interrupted by user (Ctrl+C)")
+        # Save video before re-raising
+        if save_masked_video and output_dir:
+            _save_masked_wrist_video(output_dir, skill_name, rollout_wrist_images)
+        raise  # Re-raise to propagate to main_pipeline
 
-        # Clip action to safe range
-        action = np.clip(action, -1, 1)
-
-        # Collect action for rollout saving (after binarization and clipping)
-        if save_rollout:
-            rollout_actions.append({
-                "t": t_step,
-                "action": action.copy()
-            })
-
-        # Log actions and state
-        if csv_logger is not None:
-            csv_logger.log_step(t_step, action, obs["robot_state"])
-
-        # Execute action
-        try:
-            robot_env.step(action)
-        except Exception as e:
-            print(f"   Robot step failed: {e}")
-            # Save rollout data before returning
-            if save_rollout and rollout_save_dir:
-                _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
-            return {"success": False, "reason": f"Robot step error: {e}"}
-
-        # Sleep to match DROID control frequency
-        elapsed_time = time.time() - start_time_step
-        if elapsed_time < 1 / DROID_CONTROL_FREQUENCY:
-            time.sleep(1 / DROID_CONTROL_FREQUENCY - elapsed_time)
-
-    # Save rollout data after loop completes
-    if save_rollout and rollout_save_dir:
-        _save_rollout_data(rollout_save_dir, rollout_left_images, rollout_wrist_images, rollout_states, rollout_actions, model_type)
+    # Save masked wrist video after loop completes
+    if save_masked_video and output_dir:
+        _save_masked_wrist_video(output_dir, skill_name, rollout_wrist_images)
 
     print(f"   Completed VLA execution with tracking ({max_timesteps} steps)")
     return {"success": True, "reason": "Completed"}

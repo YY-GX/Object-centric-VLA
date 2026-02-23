@@ -7,7 +7,7 @@
       "task_id": 1,
       "name": "pick red cup and place on plate",
       "skills": ["pick red cup", "place red cup on plate"],
-      "scene_objects": ["red_cup", "plate"]
+      "scene_objects": ["red_cup", "plate", "corn_can", "holder_tree", "tape", "bowl"]
     },
     {
       "task_id": 2,
@@ -98,7 +98,110 @@
       "name": "full kitchen cleanup task",
       "skills": ["pick red cup", "place red cup on plate", "pick white cup", "stack white cup on red cup", "pick parmesan cheese", "place parmesan cheese in basket", "pick tape", "hang tape on holder tree"],
       "scene_objects": ["red_cup", "plate", "white_cup", "parmesan_cheese", "basket", "tape", "holder_tree"]
+    },
+    {
+      "task_id": 17,
+      "name": "pick bowl and place on plate",
+      "skills": ["pick bowl", "place bowl on plate"],
+      "scene_objects": ["bowl", "plate"]
+    },
+    {
+      "task_id": 18,
+      "name": "pick corn can and place in basket",
+      "skills": ["pick corn can", "place corn can in basket"],
+      "scene_objects": ["corn_can", "basket"]
+    },
+    {
+      "task_id": 19,
+      "name": "pick yellow mustard and place on plate",
+      "skills": ["pick yellow mustard", "place yellow mustard on plate"],
+      "scene_objects": ["yellow_mustard", "plate"]
+    },
+    {
+      "task_id": 20,
+      "name": "pick bowl on plate then corn can in basket",
+      "skills": ["pick bowl", "place bowl on plate", "pick corn can", "place corn can in basket"],
+      "scene_objects": ["bowl", "plate", "corn_can", "basket"]
+    },
+    {
+      "task_id": 21,
+      "name": "pick red cup and bowl place on plate",
+      "skills": ["pick red cup", "place red cup on plate", "pick bowl", "place bowl on plate"],
+      "scene_objects": ["red_cup", "bowl", "plate"]
+    },
+    {
+      "task_id": 22,
+      "name": "pick corn can and yellow mustard in basket",
+      "skills": ["pick corn can", "place corn can in basket", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["corn_can", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 23,
+      "name": "pick yellow mustard on plate then corn can in basket",
+      "skills": ["pick yellow mustard", "place yellow mustard on plate", "pick corn can", "place corn can in basket"],
+      "scene_objects": ["yellow_mustard", "plate", "corn_can", "basket"]
+    },
+    {
+      "task_id": 24,
+      "name": "pick red cup bowl yellow mustard all on plate",
+      "skills": ["pick red cup", "place red cup on plate", "pick bowl", "place bowl on plate", "pick yellow mustard", "place yellow mustard on plate"],
+      "scene_objects": ["red_cup", "bowl", "yellow_mustard", "plate"]
+    },
+    {
+      "task_id": 25,
+      "name": "pick bowl on plate then corn can and yellow mustard in basket",
+      "skills": ["pick bowl", "place bowl on plate", "pick corn can", "place corn can in basket", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["bowl", "plate", "corn_can", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 26,
+      "name": "pick red cup place on plate then pick yellow mustard place in basket",
+      "skills": ["pick red cup", "place red cup on plate", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["red_cup", "yellow_mustard", "basket", "plate", "bowl", "corn_can","holder_tree", "tape"]
+    },
+    {
+      "task_id": 27,
+      "name": "pick red cup place on plate then pick yellow mustard place in basket V1",
+      "skills": ["pick yellow mustard", "place yellow mustard in basket", "pick red cup", "place red cup on plate"],
+      "scene_objects": ["red_cup", "yellow_mustard", "basket", "plate", "bowl", "corn_can","holder_tree", "tape"]
+    },
+    {
+      "task_id": 28,
+      "name": "pick tape hang then pick red cup place on plate",
+      "skills": ["pick tape", "hang tape on holder tree", "pick red cup", "place red cup on plate"],
+      "scene_objects": ["tape", "holder_tree", "red_cup", "plate", "bowl", "corn_can", "yellow_mustard"]
+    },
+    {
+      "task_id": 29,
+      "name": "pick tape hang then pick red cup place on plate V1",
+      "skills": ["pick red cup", "place red cup on plate", "pick tape", "hang tape on holder tree"],
+      "scene_objects": ["tape", "holder_tree", "red_cup", "plate", "bowl", "corn_can", "yellow_mustard"]
+    },
+    {
+      "task_id": 30,
+      "name": "pick corn can and yellow mustard in basket then pick tape hang then pick red cup place on plate",
+      "skills": ["pick corn can", "place corn can in basket", "pick yellow mustard", "place yellow mustard in basket", "pick red cup", "place red cup on plate", "pick tape", "hang tape on holder tree"],
+      "scene_objects": ["tape", "holder_tree", "red_cup", "plate", "bowl", "corn_can", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 31,
+      "name": "pick red cup place on plate then pick tape hang then pick corn can and yellow mustard in basket V1",
+      "skills": ["pick red cup", "place red cup on plate", "pick tape", "hang tape on holder tree", "pick corn can", "place corn can in basket", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["tape", "holder_tree", "red_cup", "plate", "bowl", "corn_can", "yellow_mustard", "basket"]
+    },
+    {
+      "task_id": 32,
+      "name": "pick red cup place on plate then pick yellow mustard place in basket V2",
+      "skills": ["pick red cup", "place red cup on plate", "pick yellow mustard", "place yellow mustard in basket"],
+      "scene_objects": ["red_cup", "yellow_mustard", "basket", "plate", "bowl", "corn_can","holder_tree", "tape", "white_cup", "parmesan_cheese"]
+    },
+    {
+      "task_id": 33,
+      "name": "pick tape hang then pick red cup place on plate V2",
+      "skills": ["pick tape", "hang tape on holder tree", "pick red cup", "place red cup on plate"],
+      "scene_objects": ["tape", "holder_tree", "red_cup", "plate", "bowl", "corn_can", "yellow_mustard", "parmesan_cheese", "basket"]
     }
+
   ],
 
   "skill_mappings": {
@@ -171,8 +274,41 @@
       "target_object": "holder_tree",
       "grasp_object": "tape",
       "language": "hang the tape on the holder tree.",
-      "skill_type": "hang",
+      "skill_type": "place",
       "success_check": "object_hang"
+    },
+    "pick bowl": {
+      "target_object": "bowl",
+      "language": "pick the bowl.",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
+    },
+    "pick corn can": {
+      "target_object": "corn_can",
+      "language": "pick the corn can.",
+      "skill_type": "pick",
+      "success_check": "object_lifted"
+    },
+    "place bowl on plate": {
+      "target_object": "plate",
+      "grasp_object": "bowl",
+      "language": "place the bowl on the plate.",
+      "skill_type": "place",
+      "success_check": "object_on_target"
+    },
+    "place corn can in basket": {
+      "target_object": "basket",
+      "grasp_object": "corn_can",
+      "language": "place the corn can into the basket.",
+      "skill_type": "place",
+      "success_check": "object_in_target"
+    },
+    "place yellow mustard on plate": {
+      "target_object": "plate",
+      "grasp_object": "yellow_mustard",
+      "language": "place the yellow mustard on the plate.",
+      "skill_type": "place",
+      "success_check": "object_on_target"
     }
   },
 

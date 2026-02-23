@@ -96,16 +96,7 @@ def run_registration_phase(
         print(f"Registering object {obj_idx}/{len(unique_objects)}: {object_name}")
         print(f"{'='*60}\n")
 
-        # Get current observation
-        print("📸 Capturing current frame...")
-        obs = robot_env.get_observation()
-        # Camera returns BGRA, convert to RGB for YOLOE/FoundationPose
-        bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
-        rgb = bgra_image[..., :3][..., ::-1]  # Strip alpha, then BGR to RGB
-        depth = get_camera_data(obs, 'left', robot_config, 'depth')
-        print(f"✓ Captured RGB: {rgb.shape}, Depth: {depth.shape} (converted to meters)\n")
-
-        # Get mesh path and YOLOE prompt
+        # Get mesh path and YOLOE prompt (check once before retry loop)
         if object_name not in object_meshes:
             print(f"✗ Mesh path not found for '{object_name}' in config!")
             print(f"  Skipping registration for this object.\n")
@@ -119,80 +110,103 @@ def run_registration_phase(
 
         mesh_path = object_meshes[object_name]
 
-        # Call registration
-        print(f"🔧 Running registration...")
-        if use_visual_ref:
-            print(f"  Mode: Visual Reference")
-            print(f"  Visual ref object: '{object_name}'")
-        else:
-            print(f"  Mode: Text Prompt")
-            print(f"  YOLOE prompt: '{yoloe_prompt}'")
-        print(f"  Mesh: {mesh_path}\n")
+        # Retry loop until user approves registration
+        while True:
+            # Get current observation
+            print("📸 Capturing current frame...")
+            obs = robot_env.get_observation()
+            # Camera returns BGRA, convert to RGB for YOLOE/FoundationPose
+            bgra_image = get_camera_data(obs, 'left', robot_config, 'image')
+            rgb = bgra_image[..., :3][..., ::-1]  # Strip alpha, then BGR to RGB
+            depth = get_camera_data(obs, 'left', robot_config, 'depth')
+            print(f"✓ Captured RGB: {rgb.shape}, Depth: {depth.shape} (converted to meters)\n")
 
-        result = pose_client.register(
-            rgb=rgb,
-            depth=depth,
-            K=K,
-            object_name=object_name,
-            yoloe_prompt=yoloe_prompt,
-            mesh_path=mesh_path,
-            debug_dir=str(debug_dir),
-            conf=reg_config.get("registration_conf", 0.1),
-            iteration=reg_config.get("registration_iteration", 1),
-            debug=0,
-            use_visual_ref=use_visual_ref,
-            visual_ref_object_name=object_name
-        )
+            # Call registration
+            print(f"🔧 Running registration...")
+            if use_visual_ref:
+                print(f"  Mode: Visual Reference")
+                print(f"  Visual ref object: '{object_name}'")
+            else:
+                print(f"  Mode: Text Prompt")
+                print(f"  YOLOE prompt: '{yoloe_prompt}'")
+            print(f"  Mesh: {mesh_path}\n")
 
-        if result is None or not result["success"]:
-            print(f"✗ Registration failed for '{object_name}'!")
-            print(f"  Message: {result['message'] if result else 'No response from server'}")
-            print(f"  You may need to re-run the pipeline.\n")
-            raise RuntimeError(f"Registration failed for {object_name}")
+            # Get YOLOE registration threshold from yoloe_detection.registration config
+            yoloe_reg_config = robot_config.get("yoloe_detection", {}).get("registration", {})
 
-        # Registration successful
-        print(f"✓ Registration successful!")
-        print(f"  Mask pixels: {result['mask_pixels']}")
-        print(f"  Confidence: {result['confidence']:.3f}")
+            # Mask right portion of frame for YOLOE (avoid out-of-workspace detections)
+            right_mask_ratio = yoloe_reg_config.get("right_mask_ratio", 0.0)
+            if right_mask_ratio > 0:
+                mask_start = int(rgb.shape[1] * (1 - right_mask_ratio))
+                rgb = rgb.copy()  # Don't modify original
+                rgb[:, mask_start:, :] = 0  # Black out right portion
+                print(f"  Applied right mask: {right_mask_ratio:.0%} of frame width")
 
-        # Transform pose from camera frame to base frame
-        pose_cam = np.array(result["pose"])
-        pose_base = transform_pose_camera_to_base(pose_cam, 'left', robot_config)
-        print(f"  Object position (base frame): [{pose_base[0,3]:.3f}, {pose_base[1,3]:.3f}, {pose_base[2,3]:.3f}]")
+            result = pose_client.register(
+                rgb=rgb,
+                depth=depth,
+                K=K,
+                object_name=object_name,
+                yoloe_prompt=yoloe_prompt,
+                mesh_path=mesh_path,
+                debug_dir=str(debug_dir),
+                conf=yoloe_reg_config.get("conf_threshold", 0.01),
+                iteration=reg_config.get("registration_iteration", 1),
+                debug=0,
+                use_visual_ref=use_visual_ref,
+                visual_ref_object_name=object_name
+            )
 
-        # Store registration results (both camera and base frames)
-        registration_dict[object_name] = {
-            "pose_camera": pose_cam,      # For FoundationPose tracking
-            "pose_base": pose_base,        # For motion planning
-            "mesh_path": mesh_path,
-            "timestamp": datetime.now().isoformat()
-        }
+            if result is None or not result["success"]:
+                print(f"✗ Registration failed for '{object_name}'!")
+                print(f"  Message: {result['message'] if result else 'No response from server'}")
+                print(f"  Retrying registration... (adjust object position if needed)\n")
+                continue  # Retry registration
 
-        # Show debug image paths
-        print(f"\n📁 Debug images saved:")
-        print(f"  Mask: {result['debug_images']['mask_path']}")
-        print(f"  Pose: {result['debug_images']['pose_path']}\n")
+            # Registration successful
+            print(f"✓ Registration successful!")
+            print(f"  Mask pixels: {result['mask_pixels']}")
+            print(f"  Confidence: {result['confidence']:.3f}")
 
-        # Ask user to check results
-        print(f"{'='*60}")
-        print(f"⚠️  USER APPROVAL REQUIRED")
-        print(f"{'='*60}")
-        print(f"Please check the debug images:")
-        print(f"  1. Mask visualization: {result['debug_images']['mask_path']}")
-        print(f"  2. Pose visualization: {result['debug_images']['pose_path']}")
-        print(f"\nVerify that:")
-        print(f"  - The object is correctly segmented (green overlay)")
-        print(f"  - The coordinate axes align with the object")
-        print(f"  - The Z-axis (blue) points forward from the object\n")
+            # Transform pose from camera frame to base frame
+            pose_cam = np.array(result["pose"])
+            pose_base = transform_pose_camera_to_base(pose_cam, 'left', robot_config)
+            print(f"  Object position (base frame): [{pose_base[0,3]:.3f}, {pose_base[1,3]:.3f}, {pose_base[2,3]:.3f}]")
 
-        user_input = input(f"Is the registration for '{object_name}' correct? (y/n): ").strip().lower()
+            # Store registration results (both camera and base frames)
+            registration_dict[object_name] = {
+                "pose_camera": pose_cam,      # For FoundationPose tracking
+                "pose_base": pose_base,        # For motion planning
+                "mesh_path": mesh_path,
+                "timestamp": datetime.now().isoformat()
+            }
 
-        if user_input != 'y':
-            print(f"\n✗ Registration rejected by user for '{object_name}'")
-            print(f"  Please adjust YOLOE prompt or object position and re-run pipeline.\n")
-            raise RuntimeError(f"Registration rejected by user for {object_name}")
+            # Show debug image paths
+            print(f"\n📁 Debug images saved:")
+            print(f"  Mask: {result['debug_images']['mask_path']}")
+            print(f"  Pose: {result['debug_images']['pose_path']}\n")
 
-        print(f"✓ Registration approved by user\n")
+            # Ask user to check results
+            print(f"{'='*60}")
+            print(f"⚠️  USER APPROVAL REQUIRED")
+            print(f"{'='*60}")
+            print(f"Please check the debug images:")
+            print(f"  1. Mask visualization: {result['debug_images']['mask_path']}")
+            print(f"  2. Pose visualization: {result['debug_images']['pose_path']}")
+            print(f"\nVerify that:")
+            print(f"  - The object is correctly segmented (green overlay)")
+            print(f"  - The coordinate axes align with the object")
+            print(f"  - The Z-axis (blue) points forward from the object\n")
+
+            user_input = input(f"Is the registration for '{object_name}' correct? (y/n): ").strip().lower()
+
+            if user_input != 'y':
+                print(f"\n✗ Registration rejected by user for '{object_name}'")
+                print(f"  Retrying registration... (adjust object position if needed)\n")
+                continue  # Retry registration
+
+            print(f"✓ Registration approved by user\n")
+            break  # Exit retry loop, proceed to next object
 
     print(f"\n{'='*60}")
     print(f"✅ All {len(registration_dict)} objects registered successfully!")

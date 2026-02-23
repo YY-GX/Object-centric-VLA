@@ -11,6 +11,11 @@ Usage:
     python main_pipeline.py --task_name "pick the black bowl" --max_retries 3
 """
 
+# Gevent monkey-patch MUST be at the very top before any other imports
+# This makes threading compatible with zerorpc (which uses gevent internally)
+from gevent import monkey
+monkey.patch_all(thread=True)
+
 import argparse
 import json
 import time
@@ -226,7 +231,7 @@ class RealRobotPipeline:
 
         # ========== [2.1.6.6] Success checker ==========
         print("6️⃣  Initializing success checker...")
-        self.success_checker = SuccessChecker(self.robot_config)
+        self.success_checker = SuccessChecker(self.robot_config["success_checking"])
         print("   ✓ SuccessChecker ready\n")
 
         # ========== [2.1.6.7] Run registration phase ==========
@@ -298,99 +303,110 @@ class RealRobotPipeline:
         previous_pick_skill_info = None
         success_count = 0
         total_skills = len(self.skill_sequence)
+        interrupted = False
 
         # ========== [2.2.2] Execute each skill ==========
-        for skill_idx, skill_name in enumerate(self.skill_sequence, 1):
+        try:
+            for skill_idx, skill_name in enumerate(self.skill_sequence, 1):
+                print(f"\n{'='*80}")
+                print(f"📍 SKILL {skill_idx}/{total_skills}: {skill_name}")
+                print(f"{'='*80}\n")
+
+                skill_info = get_skill_info(skill_name, self.task_config)
+                if skill_info is None:
+                    raise ValueError(f"Skill info not found for skill: {skill_name}")
+
+                skill_type = skill_info["skill_type"]
+                skill_success = False
+
+                # ========== [2.2.2.1] First attempt ==========
+                result = self._execute_single_skill(
+                    skill_info=skill_info,
+                    skill_idx=skill_idx - 1,
+                    initial_states=initial_states,
+                    csv_logger=csv_logger
+                )
+
+                if result["success"]:
+                    skill_success = True
+                    if "final_object_poses" in result:
+                        initial_states.update(result["final_object_poses"])
+                else:
+                    print(f"❌ Skill failed: {result['reason']}")
+
+                    # ========== [2.2.2.2] Retry with recovery logic ==========
+                    for retry in range(1, max_retries):
+                        print(f"\n🔄 Recovery Retry {retry}/{max_retries-1}")
+                        time.sleep(2.0)
+
+                        if skill_type == "pick":
+                            result = self._retry_pick_skill_wrapper(
+                                skill_info, initial_states, csv_logger
+                            )
+                        elif skill_type == "place":
+                            if previous_pick_skill_info is None:
+                                result = {"success": False, "reason": "No previous pick skill"}
+                            else:
+                                result = self._retry_place_skill_wrapper(
+                                    skill_info, previous_pick_skill_info, initial_states, csv_logger
+                                )
+                        else:
+                            result = self._execute_single_skill(
+                                skill_info, skill_idx - 1, initial_states, csv_logger
+                            )
+
+                        if result["success"]:
+                            skill_success = True
+                            if "final_object_poses" in result:
+                                initial_states.update(result["final_object_poses"])
+                            break
+                        else:
+                            print(f"❌ Recovery failed: {result['reason']}")
+
+                # Track pick skill for place recovery
+                if skill_type == "pick":
+                    previous_pick_skill_info = skill_info
+
+                if skill_success:
+                    success_count += 1
+                    print(f"\n✅ Skill {skill_idx}/{total_skills} completed successfully")
+                else:
+                    print(f"\n❌ Skill {skill_idx}/{total_skills} failed after {max_retries} attempts")
+                    break
+
+        except KeyboardInterrupt:
+            print(f"\n\n{'='*80}")
+            print(f"⚠️  INTERRUPTED BY USER (Ctrl+C)")
+            print(f"{'='*80}")
+            interrupted = True
+
+        finally:
+            # ========== [2.2.3] Cleanup and summary (always runs) ==========
+            if csv_logger is not None:
+                csv_logger.close()
+
+            # ========== [2.2.3b] Stop and save full pipeline video ==========
+            if self.full_video_recorder is not None:
+                task_dir_name = self.task_name.replace(" ", "_")
+                video_paths = self.full_video_recorder.stop_and_save(f"full_pipeline_{task_dir_name}")
+                if video_paths:
+                    print(f"📹 Full pipeline videos saved:")
+                    for name, path in video_paths.items():
+                        print(f"   - {name}: {path}")
+                    print()
+
             print(f"\n{'='*80}")
-            print(f"📍 SKILL {skill_idx}/{total_skills}: {skill_name}")
+            print(f"📊 TASK EXECUTION SUMMARY")
+            print(f"{'='*80}")
+            print(f"Task: {self.task_name}")
+            if interrupted:
+                print(f"Status: INTERRUPTED")
+            print(f"Skills completed: {success_count}/{total_skills}")
+            print(f"Success rate: {success_count/total_skills*100:.1f}%")
+            print(f"Output directory: {self.run_dir}")
             print(f"{'='*80}\n")
 
-            skill_info = get_skill_info(skill_name, self.task_config)
-            if skill_info is None:
-                raise ValueError(f"Skill info not found for skill: {skill_name}")
-
-            skill_type = skill_info["skill_type"]
-            skill_success = False
-
-            # ========== [2.2.2.1] First attempt ==========
-            result = self._execute_single_skill(
-                skill_info=skill_info,
-                skill_idx=skill_idx - 1,
-                initial_states=initial_states,
-                csv_logger=csv_logger
-            )
-
-            if result["success"]:
-                skill_success = True
-                if "final_object_poses" in result:
-                    initial_states.update(result["final_object_poses"])
-            else:
-                print(f"❌ Skill failed: {result['reason']}")
-
-                # ========== [2.2.2.2] Retry with recovery logic ==========
-                for retry in range(1, max_retries):
-                    print(f"\n🔄 Recovery Retry {retry}/{max_retries-1}")
-                    time.sleep(2.0)
-
-                    if skill_type == "pick":
-                        result = self._retry_pick_skill_wrapper(
-                            skill_info, initial_states, csv_logger
-                        )
-                    elif skill_type == "place":
-                        if previous_pick_skill_info is None:
-                            result = {"success": False, "reason": "No previous pick skill"}
-                        else:
-                            result = self._retry_place_skill_wrapper(
-                                skill_info, previous_pick_skill_info, initial_states, csv_logger
-                            )
-                    else:
-                        result = self._execute_single_skill(
-                            skill_info, skill_idx - 1, initial_states, csv_logger
-                        )
-
-                    if result["success"]:
-                        skill_success = True
-                        if "final_object_poses" in result:
-                            initial_states.update(result["final_object_poses"])
-                        break
-                    else:
-                        print(f"❌ Recovery failed: {result['reason']}")
-
-            # Track pick skill for place recovery
-            if skill_type == "pick":
-                previous_pick_skill_info = skill_info
-
-            if skill_success:
-                success_count += 1
-                print(f"\n✅ Skill {skill_idx}/{total_skills} completed successfully")
-            else:
-                print(f"\n❌ Skill {skill_idx}/{total_skills} failed after {max_retries} attempts")
-                break
-
-        # ========== [2.2.3] Cleanup and summary ==========
-        if csv_logger is not None:
-            csv_logger.close()
-
-        # ========== [2.2.3b] Stop and save full pipeline video ==========
-        if self.full_video_recorder is not None:
-            task_dir_name = self.task_name.replace(" ", "_")
-            video_paths = self.full_video_recorder.stop_and_save(f"full_pipeline_{task_dir_name}")
-            if video_paths:
-                print(f"📹 Full pipeline videos saved:")
-                for name, path in video_paths.items():
-                    print(f"   - {name}: {path}")
-                print()
-
-        print(f"\n{'='*80}")
-        print(f"📊 TASK EXECUTION SUMMARY")
-        print(f"{'='*80}")
-        print(f"Task: {self.task_name}")
-        print(f"Skills completed: {success_count}/{total_skills}")
-        print(f"Success rate: {success_count/total_skills*100:.1f}%")
-        print(f"Output directory: {self.run_dir}")
-        print(f"{'='*80}\n")
-
-        return success_count == total_skills
+        return success_count == total_skills and not interrupted
 
     # ========== [2.3] SINGLE SKILL EXECUTION ==========
 
@@ -496,9 +512,17 @@ class RealRobotPipeline:
         # ========== [2.3.4] Move to above pose ==========
         if self.motion_planner is not None:
             print(f"4️⃣  Moving to above pose...")
-            mp_result = self.motion_planner.move_to_pose(above_pose, method="linear")
-            if not mp_result["success"]:
-                return {"success": False, "reason": f"Failed to reach above pose"}
+            mp_max_retries = self.robot_config["motion_planning"].get("max_retries", 3)
+
+            for mp_attempt in range(mp_max_retries):
+                mp_result = self.motion_planner.move_to_pose(above_pose, method="linear")
+                if mp_result["success"]:
+                    break
+                if mp_attempt < mp_max_retries - 1:
+                    print(f"⚠️  MP attempt {mp_attempt + 1}/{mp_max_retries} failed, retrying...")
+                else:
+                    print(f"⚠️  MP failed after {mp_max_retries} attempts")
+                    return {"success": False, "reason": f"Failed to reach above pose after {mp_max_retries} attempts"}
             print()
 
         # ========== [2.3.5] Execute VLA skill ==========
@@ -517,7 +541,8 @@ class RealRobotPipeline:
             yoloe_text_prompts=self.yoloe_text_prompts,
             csv_logger=csv_logger,
             get_tracked_objects_func=get_tracked_objects_for_skill,
-            get_distractor_objects_func=lambda si: get_distractor_objects(si, self.task_config, self.task_name)
+            get_distractor_objects_func=lambda si: get_distractor_objects(si, self.task_config, self.task_name),
+            output_dir=str(self.run_dir)
         )
 
         if not vla_result["success"]:
@@ -528,7 +553,10 @@ class RealRobotPipeline:
         # ========== [2.3.6] Move EE up ==========
         if self.motion_planner is not None:
             print(f"6️⃣  Moving EE up...")
-            self.motion_planner.move_ee_up(lift_distance=0.05, skill_type=skill_type)
+            lift_distance = self.robot_config["vla_execution"].get("post_skill_lift_distance", 0.1)
+            lift_success = self.motion_planner.move_ee_up(lift_distance=lift_distance, skill_type=skill_type)
+            if not lift_success:
+                print(f"⚠️  Lift did not fully converge, but continuing to success check...")
             print()
 
         # ========== [2.3.7] Get final poses ==========
@@ -637,7 +665,8 @@ class RealRobotPipeline:
                 yoloe_text_prompts=self.yoloe_text_prompts,
                 csv_logger=csv_logger,
                 get_tracked_objects_func=get_tracked_objects_for_skill,
-                get_distractor_objects_func=lambda s: get_distractor_objects(s, self.task_config, self.task_name)
+                get_distractor_objects_func=lambda s: get_distractor_objects(s, self.task_config, self.task_name),
+                output_dir=str(self.run_dir)
             ),
             csv_logger=csv_logger
         )
@@ -675,7 +704,8 @@ class RealRobotPipeline:
                 yoloe_text_prompts=self.yoloe_text_prompts,
                 csv_logger=csv_logger,
                 get_tracked_objects_func=get_tracked_objects_for_skill,
-                get_distractor_objects_func=lambda s: get_distractor_objects(s, self.task_config, self.task_name)
+                get_distractor_objects_func=lambda s: get_distractor_objects(s, self.task_config, self.task_name),
+                output_dir=str(self.run_dir)
             ),
             csv_logger=csv_logger
         )
@@ -707,8 +737,8 @@ def main():
     parser.add_argument(
         "--max_retries",
         type=int,
-        default=1,
-        help="Maximum retries per skill"
+        default=None,
+        help="Maximum retries per skill (default: from config)"
     )
 
     args = parser.parse_args()
@@ -720,7 +750,10 @@ def main():
         robot_config_path=args.robot_config
     )
 
-    success = pipeline.execute_task(max_retries=args.max_retries)
+    # Use CLI value if provided, otherwise use config value
+    max_retries = args.max_retries if args.max_retries is not None else pipeline.robot_config["vla_execution"]["max_retries"]
+
+    success = pipeline.execute_task(max_retries=max_retries)
 
     if success:
         print("🎉 Task completed successfully!")

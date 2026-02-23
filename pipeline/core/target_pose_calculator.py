@@ -87,9 +87,22 @@ class TargetPoseCalculator:
         # Total height offset = default_height + half_longest_edge + gripper_length
         total_height = above_height + half_longest_edge + self.GRIPPER_LENGTH
 
+        # Add extra height for specific objects
+        if object_name == "holder_tree":
+            total_height += 0.10  # Extra 10cm for holder_tree
+            print(f"   Added extra 10cm for holder_tree")
+        if object_name == "basket":
+            total_height += 0.10  # Extra 10cm for basket
+            print(f"   Added extra 10cm for basket")
+
         # Calculate above position: same XY, add height to Z
         above_pos = obj_pos.copy()
         above_pos[2] += total_height
+
+        # Object-specific XY adjustments
+        if object_name == "holder_tree":
+            above_pos[1] -= 0.10  # -10cm in Y axis for holder_tree
+            print(f"   Added -10cm Y offset for holder_tree")
 
         # Use face-down orientation
         above_euler = self.REST_EULER.copy()
